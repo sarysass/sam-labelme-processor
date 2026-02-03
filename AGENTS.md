@@ -1,70 +1,70 @@
-# SAM Labelme Processor - Agent Development Guide
+# SAM Labelme 处理器 - Agent 开发指南
 
-This guide is for agentic coding assistants working on this project. Follow these conventions to maintain code quality and consistency.
+本指南用于参与此项目的智能编码助手。遵循这些约定以保持代码质量和一致性。
 
-## Project Overview
+## 项目概览
 
-Batch processing tool that generates masks from bounding boxes using SAM (Segment Anything Model) and outputs Labelme JSON format. Built with strict TDD methodology.
+批处理工具，使用 SAM（Segment Anything Model）从边界框生成 mask，输出 Labelme JSON 格式。采用严格的 TDD 方法论构建。
 
-**Core Workflow**: Load images → Read bboxes → SAM inference → Save masks (separate or combined)
+**核心工作流程**：加载图像 → 读取边界框 → SAM 推理 → 保存 mask（独立或合并）
 
-## Build & Test Commands
+## 构建与测试命令
 
 ```bash
-# Install dependencies
+# 安装依赖
 pip install -r requirements.txt
 
-# Run all tests with verbose output
+# 运行所有测试（详细输出）
 pytest tests/ -v
 
-# Run specific test module
+# 运行特定测试模块
 pytest tests/test_config.py -v
 
-# Run single test function
+# 运行单个测试函数
 pytest tests/test_data_manager.py::TestDataManager::test_scan_all_images -v
 
-# Generate coverage report
+# 生成覆盖率报告
 pytest tests/ --cov=src --cov-report=html
 
-# Run CLI commands
+# 运行 CLI 命令
 python cli.py validate
 python cli.py stats
 python cli.py process --resume
 ```
 
-## Code Style Guidelines
+## 代码风格指南
 
-### File Structure
+### 文件结构
 ```
 sam-labelme-processor/
-├── cli.py                 # CLI entry point (no package import)
-├── config.yaml            # Configuration file
+├── cli.py                 # CLI 入口（无包导入）
+├── config.yaml            # 配置文件
 ├── src/
-│   ├── core/             # Core logic modules
-│   └── models/           # Model wrappers (SAM)
-└── tests/               # Test files mirror src structure
+│   ├── core/             # 核心逻辑模块
+│   └── models/           # 模型封装（SAM）
+└── tests/               # 测试文件镜像 src 结构
 ```
 
-### Imports
+### 导入顺序
 
-**Order**: Standard library → External packages → Local modules
+**顺序**：标准库 → 外部包 → 本地模块
 
 ```python
-# Standard library
+# 标准库
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# External packages
+# 外部包
 import yaml
 import cv2
 import numpy as np
 import logging
 
-# Local modules (from src/)
+# 本地模块（来自 src/）
 from src.core.config import Config
 ```
 
-**CLI entry point pattern** (cli.py only):
+**CLI 入口模式**（仅 cli.py）：
 ```python
 import sys
 from pathlib import Path
@@ -72,19 +72,19 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from src.core.config import Config
 ```
 
-**Relative imports within src/**:
+**src/ 内的相对导入**：
 ```python
 from ..core.config import Config
 from ..models.sam_wrapper import SAMWrapper
 ```
 
-### Type Annotations
+### 类型注解
 
-**Mandatory** for all function parameters and return values. Use `Optional[T]` for nullable types, not `T | None` (Python 3.10+).
+**必需**所有函数参数和返回值。使用 `Optional[T]` 表示可空类型，不使用 `T | None`（Python 3.10+）。
 
-**Common types from typing module**: `List`, `Dict`, `Any`, `Optional`, `Tuple`, `Callable`
+**typing 模块的常用类型**：`List`, `Dict`, `Any`, `Optional`, `Tuple`, `Callable`
 
-**Dataclasses with type hints**:
+**带类型提示的数据类**：
 ```python
 from dataclasses import dataclass
 
@@ -94,63 +94,63 @@ class DataItem:
     bbox_path: Optional[Path] = None
 ```
 
-### Naming Conventions
+### 命名约定
 
-- **Classes**: `PascalCase` → `Config`, `DataManager`, `SAMProcessor`
-- **Functions/Methods**: `snake_case` → `process_single()`, `get_pending_items()`
-- **Constants**: `UPPER_SNAKE_CASE` → `IMAGE_EXTENSIONS`
-- **Private methods**: `_snake_case` → `_load_from_file()`
-- **Instance variables**: `self.variable_name`
-- **Test classes**: `Test{ClassName}` → `TestConfig`, `TestDataManager`
-- **Test methods**: `test_{description}` → `test_default_config_values()`
+- **类**：`PascalCase` → `Config`, `DataManager`, `SAMProcessor`
+- **函数/方法**：`snake_case` → `process_single()`, `get_pending_items()`
+- **常量**：`UPPER_SNAKE_CASE` → `IMAGE_EXTENSIONS`
+- **私有方法**：`_snake_case` → `_load_from_file()`
+- **实例变量**：`self.variable_name`
+- **测试类**：`Test{ClassName}` → `TestConfig`, `TestDataManager`
+- **测试方法**：`test_{description}` → `test_default_config_values()`
 
-### Documentation
+### 文档字符串
 
-**Module docstring** (at top of every .py file):
+**模块文档字符串**（每个 .py 文件顶部）：
 ```python
 """
-Configuration management module.
+配置管理模块。
 """
 ```
 
-**Class docstring** with purpose description:
+**类文档字符串**包含用途描述：
 ```python
 class SAMWrapper:
     """
-    SAM model wrapper.
+    SAM 模型封装。
 
-    Wraps MicroHunter's UltralyticsSAMPredictor, providing a simplified interface.
+    封装 MicroHunter 的 UltralyticsSAMPredictor，提供简化的接口。
     """
 ```
 
-**Function docstring format**:
+**函数文档字符串格式**：
 ```python
 def predict(self, image: np.ndarray, bboxes: List[List[float]]) -> List[Dict[str, Any]]:
     """
-    Perform SAM inference on image.
+    在图像上执行 SAM 推理。
 
     Args:
-        image: BGR format numpy array (H, W, 3).
-        bboxes: BBox list, format [[x1, y1, x2, y2], ...].
+        image: BGR 格式的 numpy 数组 (H, W, 3)。
+        bboxes: 边界框列表，格式 [[x1, y1, x2, y2], ...]。
 
     Returns:
-        List of mask information for each bbox.
+        每个边界框的 mask 信息列表。
     """
 ```
 
-### Error Handling
+### 错误处理
 
-**Logging pattern**:
+**日志记录模式**：
 ```python
 import logging
 logger = logging.getLogger(__name__)
 
-logger.info(f"Processing {len(data_items)} items")
-logger.warning(f"Failed: {error_message}")
-logger.error(f"Error processing: {e}")
+logger.info(f"处理 {len(data_items)} 个项目")
+logger.warning(f"失败: {error_message}")
+logger.error(f"处理错误: {e}")
 ```
 
-**Return result objects for errors** (don't raise unless critical):
+**为错误返回结果对象**（非关键错误不抛出异常）：
 ```python
 @dataclass
 class ProcessingResult:
@@ -159,15 +159,15 @@ class ProcessingResult:
     error_message: Optional[str] = None
 
 if not data_item.bbox_path.exists():
-    return ProcessingResult(data_item=data_item, success=False, error_message="BBox file not found")
+    return ProcessingResult(data_item=data_item, success=False, error_message="未找到边界框文件")
 ```
 
-### Testing Style
+### 测试风格
 
-**Test file structure**:
+**测试文件结构**：
 ```python
 """
-Tests for Config module.
+Config 模块测试。
 """
 import pytest
 from pathlib import Path
@@ -177,28 +177,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from src.core.config import Config
 
 class TestConfig:
-    """Tests for Config class."""
+    """Config 类的测试。"""
 
     def test_default_config_values(self):
-        """Test: Use default values when no config file is provided."""
+        """测试：未提供配置文件时使用默认值。"""
         config = Config()
         assert config.get("sam.weights") == "weights/sam2.1_t.pt"
 
     @pytest.fixture
     def temp_data_dir(self):
-        """Create temporary data directory structure."""
+        """创建临时数据目录结构。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 ```
 
-**Test naming**:
-- Test methods: `test_{feature}_{scenario}` or `test_{description}`
-- Fixture names: descriptive nouns (`temp_data_dir`, `mock_sam_wrapper`)
-- Test descriptions in docstrings: `"Test: {what is being tested}"`
+**测试命名**：
+- 测试方法：`test_{feature}_{scenario}` 或 `test_{description}`
+- Fixture 名称：描述性名词（`temp_data_dir`, `mock_sam_wrapper`）
+- 文档字符串中的测试描述：`"测试: {正在测试的内容}"`
 
-### Path Handling
+### 路径处理
 
-**Always use pathlib.Path**:
+**始终使用 pathlib.Path**：
 ```python
 from pathlib import Path
 
@@ -207,37 +207,37 @@ data_root.mkdir(parents=True, exist_ok=True)
 image_path = self.images_dir / relative_image_path
 ```
 
-## Development Workflow
+## 开发工作流程
 
-1. **RED**: Write failing test first
-2. **GREEN**: Implement minimal code to pass test
-3. **REFACTOR**: Clean up while keeping tests green
+1. **RED**：先编写失败的测试
+2. **GREEN**：实现最少的代码使测试通过
+3. **REFACTOR**：清理代码，同时保持测试通过
 
-Run tests after every change: `pytest tests/ -v`
+每次更改后运行测试：`pytest tests/ -v`
 
-## Important Notes
+## 重要说明
 
-- No build step required (pure Python)
-- No linting/formatting config found - follow PEP 8
-- Python 3.10+ required
-- Virtual environment recommended
-- CLI entry point (cli.py) uses sys.path manipulation
-- All other code uses relative imports from src/
+- 无需构建步骤（纯 Python）
+- 未找到 linting/formatting 配置 - 遵循 PEP 8
+- 需要 Python 3.10+
+- 推荐使用虚拟环境
+- CLI 入口点（cli.py）使用 sys.path 操作
+- 所有其他代码使用来自 src/ 的相对导入
 
-## Output Format
+## 输出格式
 
-### Current Implementation
+### 当前实现
 
-**Shape Type**: `polygon`
-**Fields**: 
+**形状类型**：`polygon`
+**字段**：
 - `shape_type`: "polygon"
-- `points`: List of polygon contour points [[x, y], ...]
-- `label`: Class label
-- `group_id`: Optional integer
+- `points`: 多边形轮廓点列表 [[x, y], ...]
+- `label`: 类标签
+- `group_id`: 可选整数
 - `description`: "Generated by SAM"
 - `flags`: `{"sam_generated": true}`
 
-**Example**:
+**示例**：
 ```json
 {
   "version": "5.10.1",
@@ -258,25 +258,25 @@ Run tests after every change: `pytest tests/ -v`
 }
 ```
 
-**Characteristics**:
-- Multi-gon points: 50-93 points per shape (simplified via OpenCV APPROX_SIMPLE)
-- No `mask` field (reduced storage size)
-- Supports manual editing: Add/remove/move polygon vertices in Labelme
+**特征**：
+- 多边形点：每个形状 50-93 个点（通过 OpenCV APPROX_SIMPLE 简化）
+- 无 `mask` 字段（减少存储大小）
+- 支持手动编辑：在 Labelme 中添加/删除/移动多边形顶点
 
-### Comparison with Labelme AI Mask
+### 与 Labelme AI Mask 的对比
 
-| Feature | Current Implementation | Labelme AI Mask |
-|---------|----------------------|------------------|
-| **shape_type** | "polygon" | "mask" or "polygon" |
-| **mask field** | ❌ No | ✅ Yes (Base64 PNG) |
-| **points** | 50-93 (simplified) | Varies (from SAM output) |
-| **Storage overhead** | ~593 KB (9 shapes) | ~669 KB (with mask field, +13%) |
-| **Rendering in Labelme** | Green outline + semi-transparent fill | White fill + green outline (mask field) |
-| **Manual editing** | Add/remove/move vertices | Click include/exclude points (mask) or edit vertices (polygon) |
+| 特性 | 当前实现 | Labelme AI Mask |
+|---------|------------------|------------------|
+| **shape_type** | "polygon" | "mask" 或 "polygon" |
+| **mask 字段** | ❌ 无 | ✅ 有（Base64 PNG） |
+| **points** | 50-93（已简化） | 可变（来自 SAM 输出） |
+| **存储开销** | ~593 KB（9 个形状） | ~669 KB（包含 mask 字段，+13%） |
+| **Labelme 渲染** | 绿色轮廓 + 半透明填充 | 白色填充 + 绿色轮廓（mask 字段） |
+| **手动编辑** | 添加/删除/移动顶点 | 点击包含/排除点（mask）或编辑顶点（polygon） |
 
-### Training Data Conversion
+### 训练数据转换
 
-To convert polygon output to binary masks for SAM training:
+将 polygon 输出转换为 SAM 训练用的二进制 mask：
 
 ```python
 import json
@@ -284,27 +284,27 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-# Read mask JSON
+# 读取 mask JSON
 with open('mask/frame_0000.json') as f:
     data = json.load(f)
 
-# Create blank mask
+# 创建空白 mask
 mask = np.zeros((data['imageHeight'], data['imageWidth']), dtype=np.uint8)
 
-# Fill polygons
+# 填充多边形
 for shape in data['shapes']:
     if shape['shape_type'] == 'polygon':
         points = np.array(shape['points'], dtype=np.int32)
         cv2.fillPoly(mask, [points], 255)
 
-# Save training mask
+# 保存训练 mask
 cv2.imwrite('training_mask.png', mask)
 ```
 
-### Future Considerations
+### 未来考虑
 
-If full compatibility with Labelme AI Mask is needed, consider:
-- Adding `mask` field with Base64-encoded PNG images
-- Supporting `shape_type="mask"` option
-- Preserving original SAM output before polygon simplification
-- Estimated storage overhead: ~13% increase for typical datasets
+如果需要与 Labelme AI Mask 完全兼容，请考虑：
+- 添加包含 Base64 编码 PNG 图像的 `mask` 字段
+- 支持 `shape_type="mask"` 选项
+- 保留多边形简化前的原始 SAM 输出
+- 预估存储开销：典型数据集增加约 13%

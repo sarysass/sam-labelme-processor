@@ -1,17 +1,17 @@
-# SAM model configuration
+# SAM 模型配置
 sam:
-  weights: "weights/sam2.1_t.pt"  # Update this path to your SAM model weights
+  weights: "weights/sam2.1_t.pt"  # 请修改为你的 SAM 模型权重路径
   device: "auto"                   # auto, cuda:0, cpu, mps (Mac M1/M2/M3 GPU)
   imgsz: 1024
   iou_threshold: 0.3
 
-# Output settings
+# 输出设置
 output:
-  separate: true                   # Output separate mask JSON
-  combine: false                   # Output combined bbox+mask JSON
+  separate: true                   # 输出独立的 mask JSON 文件
+  combine: false                   # 输出合并的 bbox+mask JSON 文件
   format: "polygon"                # polygon, contour
 
-# Data paths
+# 数据路径
 data:
   root: "./data/Benchmark_Dataset"
   images_dir: "images"
@@ -19,30 +19,30 @@ data:
   mask_dir: "mask"
   combined_dir: "output/combined"
 
-# Batch processing settings
+# 批处理设置
 processing:
-  batch_size: 20                   # Number of images per batch
-  num_workers: 2                   # Number of parallel processes
+  batch_size: 20                   # 每批处理的图像数量
+  num_workers: 2                   # 并行进程数量
 
-  # Progress & Recovery
-  enable_checkpoint: true          # Enable checkpoint saving
-  checkpoint_interval: 100         # Save checkpoint every N images
-  enable_resume: true             # Support resuming from checkpoint
+  # 进度与恢复
+  enable_checkpoint: true          # 启用检查点保存
+  checkpoint_interval: 100         # 每处理 N 张图像保存一次检查点
+  enable_resume: true             # 支持从检查点恢复
 
-  # Error handling
-  max_retries: 3                  # Max retries per batch
-  retry_delay: 5                  # Retry delay in seconds
+  # 错误处理
+  max_retries: 3                  # 每批最大重试次数
+  retry_delay: 5                  # 重试延迟（秒）
 
-  # Memory management
-  memory_limit_gb: 12              # Memory limit per worker (GB)
-  enable_memory_watch: true       # Downgrade to single process if memory exceeded
-  preload_images: false           # Whether to preload images into memory
-  image_cache_size: 10            # Number of images to cache per worker
+  # 内存管理
+  memory_limit_gb: 12              # 每个 worker 的内存限制（GB）
+  enable_memory_watch: true       # 内存超限时降级为单进程
+  preload_images: false           # 是否预加载图像到内存
+  image_cache_size: 10            # 每个 worker 缓存的图像数量
 
-  # Empty labels
-  skip_empty_labels: true          # Skip files with shapes=0
+  # 空标签
+  skip_empty_labels: true          # 跳过 shapes=0 的文件
 
-# Logging
+# 日志
 logging:
   level: "INFO"
   file: "logs/processor.log"
