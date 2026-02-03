@@ -1,0 +1,92 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Logs
+logs/
+*.log
+benchmark_run.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+data/Benchmark_Dataset/
+归档.zip
+
+# Temporary files
+.reports/
+.claude/
+*.tmp
+*.bak
+*.swp
+
+# Cache
+.ruff_cache/
+*.pyc
+.mypy_cache/
+
+# Configuration with sensitive data
+# config.yaml contains local absolute paths
+# Use config.yaml.example instead
+
+# Checkpoints and progress
+.processing_checkpoint.json
+*.checkpoint
+
+# Output directories
+output/
+checkpoints/
+
+# Keep demo_data for testing
+!data/demo_data/

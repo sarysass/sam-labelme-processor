@@ -1,0 +1,48 @@
+# SAM model configuration
+sam:
+  weights: "weights/sam2.1_t.pt"  # Update this path to your SAM model weights
+  device: "auto"                   # auto, cuda:0, cpu, mps (Mac M1/M2/M3 GPU)
+  imgsz: 1024
+  iou_threshold: 0.3
+
+# Output settings
+output:
+  separate: true                   # Output separate mask JSON
+  combine: false                   # Output combined bbox+mask JSON
+  format: "polygon"                # polygon, contour
+
+# Data paths
+data:
+  root: "./data/Benchmark_Dataset"
+  images_dir: "images"
+  bbox_dir: "labels"
+  mask_dir: "mask"
+  combined_dir: "output/combined"
+
+# Batch processing settings
+processing:
+  batch_size: 20                   # Number of images per batch
+  num_workers: 2                   # Number of parallel processes
+
+  # Progress & Recovery
+  enable_checkpoint: true          # Enable checkpoint saving
+  checkpoint_interval: 100         # Save checkpoint every N images
+  enable_resume: true             # Support resuming from checkpoint
+
+  # Error handling
+  max_retries: 3                  # Max retries per batch
+  retry_delay: 5                  # Retry delay in seconds
+
+  # Memory management
+  memory_limit_gb: 12              # Memory limit per worker (GB)
+  enable_memory_watch: true       # Downgrade to single process if memory exceeded
+  preload_images: false           # Whether to preload images into memory
+  image_cache_size: 10            # Number of images to cache per worker
+
+  # Empty labels
+  skip_empty_labels: true          # Skip files with shapes=0
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/processor.log"
