@@ -9,10 +9,15 @@ import cv2
 from multiprocessing import Pool
 import json
 import time
+import numpy as np
 
 from ..models.sam_wrapper import SAMWrapper
 from ..core.labelme_io import LabelmeIO, MaskShape
 from ..core.data_manager import DataManager, DataItem
+from ..utils.polygon_utils import (
+    simplify_polygon_adaptive,
+    simplify_contour_to_max_points,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,7 @@ class SAMProcessor:
         max_retries: int = 3,
         retry_delay: int = 5,
         skip_empty_labels: bool = True,
+        simplification_config: Optional[dict] = None,
     ):
         """
         Initialize SAM processor.
@@ -74,6 +80,7 @@ class SAMProcessor:
             max_retries: Max retries per batch.
             retry_delay: Retry delay in seconds.
             skip_empty_labels: Skip files with shapes=0.
+            simplification_config: Polygon simplification config.
         """
         self.data_manager = data_manager
         self.sam_wrapper = sam_wrapper
@@ -88,6 +95,20 @@ class SAMProcessor:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.skip_empty_labels = skip_empty_labels
+
+        self.simplification_enabled = (
+            simplification_config.get("enabled", True)
+            if simplification_config
+            else True
+        )
+        self.simplification_method = (
+            simplification_config.get("method", "adaptive")
+            if simplification_config
+            else "adaptive"
+        )
+        self.simplification_params = (
+            simplification_config if simplification_config else {}
+        )
 
         self.checkpoint_file = None
         if data_manager and data_manager.data_root:
@@ -223,7 +244,57 @@ class SAMProcessor:
             mask_shapes = []
             for i, (bbox_shape, sam_result) in enumerate(zip(bbox_shapes, sam_results)):
                 contour = sam_result["contour"]
-                points = contour.tolist() if hasattr(contour, "tolist") else contour
+
+                if self.simplification_enabled:
+                    contour_np = np.array(contour, dtype=np.float32)
+                    if len(contour_np.shape) == 2 and contour_np.shape[1] == 2:
+                        contour_np = contour_np.reshape(-1, 1, 2)
+
+                    if self.simplification_method == "adaptive":
+                        simplified_contour = simplify_polygon_adaptive(
+                            contour_np,
+                            base_epsilon_factor=self.simplification_params.get(
+                                "base_epsilon_factor", 0.005
+                            ),
+                            adaptive_factor=self.simplification_params.get(
+                                "adaptive_factor", 0.5
+                            ),
+                            min_points=self.simplification_params.get("min_points", 8),
+                            max_points=self.simplification_params.get("max_points", 50),
+                            curvature_window=self.simplification_params.get(
+                                "curvature_window", 5
+                            ),
+                        )
+                    elif self.simplification_method == "max_points":
+                        simplified_contour = simplify_contour_to_max_points(
+                            contour_np,
+                            max_points=self.simplification_params.get("max_points", 50),
+                        )
+                    else:
+                        simplified_contour = contour_np
+
+                    contour = simplified_contour
+
+                if hasattr(contour, "reshape"):
+                    contour = contour.reshape(-1, 2)
+                    points = contour.tolist()
+                elif hasattr(contour, "tolist"):
+                    points = contour.tolist()
+                    if (
+                        points
+                        and isinstance(points[0], list)
+                        and len(points[0]) > 0
+                        and isinstance(points[0][0], list)
+                    ):
+                        points = [[float(pt[0]), float(pt[1])] for pt in points]
+                else:
+                    points = contour
+
+                if not isinstance(points, list) or not all(
+                    isinstance(p, list) and len(p) == 2 for p in points
+                ):
+                    points = []
+
                 mask_shapes.append(
                     MaskShape(
                         label=bbox_shape.label,

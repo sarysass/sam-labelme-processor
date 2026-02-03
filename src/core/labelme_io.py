@@ -132,10 +132,8 @@ class LabelmeIO:
             "imagePath": image_info.image_path,
             "imageHeight": image_info.image_height,
             "imageWidth": image_info.image_width,
+            "imageData": image_info.image_data,
         }
-        # Add imageData if available
-        if image_info.image_data:
-            data["imageData"] = image_info.image_data
 
         # Write to file
         json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,10 +191,8 @@ class LabelmeIO:
             "imagePath": image_info.image_path,
             "imageHeight": image_info.image_height,
             "imageWidth": image_info.image_width,
+            "imageData": image_info.image_data,
         }
-        # Add imageData if available
-        if image_info.image_data:
-            data["imageData"] = image_info.image_data
 
         # Write to file
         json_path.parent.mkdir(parents=True, exist_ok=True)

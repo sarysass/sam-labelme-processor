@@ -1,0 +1,50 @@
+# SAM 模型配置
+sam:
+  weights: "/Users/shali/projects/MicroHunter/weights/sam2.1_t.pt"
+  device: "mps"
+  imgsz: 1024
+  iou_threshold: 0.3
+
+# 输出设置
+output:
+  separate: true
+  combine: false
+  format: "polygon"
+
+  # 多边形简化设置（基于曲率自适应）
+  polygon_simplification:
+    enabled: true
+    method: "adaptive"
+    base_epsilon_factor: 0.005
+    adaptive_factor: 0.5
+    min_points: 8
+    max_points: 50
+    curvature_window: 5
+
+# 数据路径
+data:
+  root: "./data/demo_data"
+  images_dir: "images"
+  bbox_dir: "labels"
+  mask_dir: "mask"
+  combined_dir: "output/combined"
+
+# 批处理设置
+processing:
+  batch_size: 20
+  num_workers: 1
+  enable_checkpoint: true
+  checkpoint_interval: 100
+  enable_resume: true
+  max_retries: 3
+  retry_delay: 5
+  memory_limit_gb: 12
+  enable_memory_watch: true
+  preload_images: false
+  image_cache_size: 10
+  skip_empty_labels: true
+
+# 日志
+logging:
+  level: "INFO"
+  file: "logs/demo_processor.log"

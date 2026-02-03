@@ -69,6 +69,7 @@ def cmd_process(args):
         batch_size=config.get("processing.batch_size", 20),
         num_workers=config.get("processing.num_workers", 2),
         enable_resume=config.get("processing.enable_resume", True),
+        simplification_config=config.get("output.polygon_simplification"),
     )
 
     # Get pending items

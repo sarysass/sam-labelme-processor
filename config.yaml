@@ -1,0 +1,58 @@
+# SAM 模型配置
+sam:
+  weights: "/Users/shali/projects/MicroHunter/weights/sam2.1_t.pt"
+  device: "mps"               # auto, cuda:0, cpu, mps (Mac M1/M2/M3 GPU)
+  imgsz: 1024
+  iou_threshold: 0.3
+
+# 输出设置
+output:
+  separate: true              # 输出独立的 mask JSON 文件
+  combine: false              # 输出合并的 bbox+mask JSON 文件
+  format: "polygon"           # polygon, contour
+
+  # 多边形简化设置（基于曲率自适应）
+  polygon_simplification:
+    enabled: true            # 启用智能简化
+    method: "adaptive"      # adaptive, max_points, fixed
+    base_epsilon_factor: 0.004  # 基础简化系数（越大越简化）
+    adaptive_factor: 0.5    # 自适应因子（0-1），曲率影响程度
+    min_points: 10           # 最少保留点数
+    max_points: 50          # 最多保留点数
+    curvature_window: 5     # 曲率计算窗口大小
+
+# 数据路径
+data:
+  root: "./data/Benchmark_Dataset"
+  images_dir: "images"
+  bbox_dir: "labels"
+  mask_dir: "mask"
+  combined_dir: "output/combined"
+
+# 批处理设置
+processing:
+  batch_size: 20            # 每批处理的图像数量
+  num_workers: 2             # 并行进程数量
+
+  # 进度与恢复
+  enable_checkpoint: true    # 启用检查点保存
+  checkpoint_interval: 100  # 每处理 N 张图像保存一次检查点
+  enable_resume: true       # 支持从检查点恢复
+
+  # 错误处理
+  max_retries: 3            # 每批最大重试次数
+  retry_delay: 5            # 重试延迟（秒）
+
+  # 内存管理
+  memory_limit_gb: 12        # 每个 worker 的内存限制（GB）
+  enable_memory_watch: true   # 内存超限时降级为单进程
+  preload_images: false     # 是否预加载图像到内存
+  image_cache_size: 10      # 每个 worker 缓存的图像数量
+
+  # 空标签
+  skip_empty_labels: true   # 跳过 shapes=0 的文件
+
+# 日志
+logging:
+  level: "INFO"
+  file: "logs/benchmark_processor.log"

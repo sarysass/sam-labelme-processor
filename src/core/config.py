@@ -18,7 +18,20 @@ class Config:
             "imgsz": 1024,
             "iou_threshold": 0.3,
         },
-        "output": {"separate": True, "combine": False, "format": "polygon"},
+        "output": {
+            "separate": True,
+            "combine": False,
+            "format": "polygon",
+            "polygon_simplification": {
+                "enabled": True,
+                "method": "adaptive",
+                "base_epsilon_factor": 0.005,
+                "adaptive_factor": 0.5,
+                "min_points": 8,
+                "max_points": 50,
+                "curvature_window": 5,
+            },
+        },
         "data": {
             "root": "./data",
             "images_dir": "images",
