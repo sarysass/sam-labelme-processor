@@ -3,21 +3,19 @@ SAM processor module for batch processing.
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 import cv2
 from multiprocessing import Pool
 import json
 import time
+import os
+import resource
 import numpy as np
 
 from ..models.sam_wrapper import SAMWrapper
-from ..core.labelme_io import LabelmeIO, MaskShape
+from ..core.labelme_io import LabelmeIO, MaskShape, BBoxShape, ImageInfo
 from ..core.data_manager import DataManager, DataItem
-from ..utils.polygon_utils import (
-    simplify_polygon_adaptive,
-    simplify_contour_to_max_points,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +59,10 @@ class SAMProcessor:
         max_retries: int = 3,
         retry_delay: int = 5,
         skip_empty_labels: bool = True,
-        simplification_config: Optional[dict] = None,
+        memory_limit_gb: float = 12,
+        enable_memory_watch: bool = True,
+        preload_images: bool = False,
+        image_cache_size: int = 10,
     ):
         """
         Initialize SAM processor.
@@ -80,7 +81,10 @@ class SAMProcessor:
             max_retries: Max retries per batch.
             retry_delay: Retry delay in seconds.
             skip_empty_labels: Skip files with shapes=0.
-            simplification_config: Polygon simplification config.
+            memory_limit_gb: Memory limit in GB.
+            enable_memory_watch: Enable memory usage check.
+            preload_images: Preload images into cache.
+            image_cache_size: Maximum number of cached images.
         """
         self.data_manager = data_manager
         self.sam_wrapper = sam_wrapper
@@ -95,20 +99,12 @@ class SAMProcessor:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.skip_empty_labels = skip_empty_labels
-
-        self.simplification_enabled = (
-            simplification_config.get("enabled", True)
-            if simplification_config
-            else True
-        )
-        self.simplification_method = (
-            simplification_config.get("method", "adaptive")
-            if simplification_config
-            else "adaptive"
-        )
-        self.simplification_params = (
-            simplification_config if simplification_config else {}
-        )
+        self.memory_limit_gb = memory_limit_gb
+        self.enable_memory_watch = enable_memory_watch
+        self.preload_images = preload_images
+        self.image_cache_size = image_cache_size
+        self._image_cache = {}
+        self._image_cache_order = []
 
         self.checkpoint_file = None
         if data_manager and data_manager.data_root:
@@ -121,7 +117,11 @@ class SAMProcessor:
 
     def _save_checkpoint(self, processed_count: int, total_count: int) -> None:
         """Save checkpoint to JSON file."""
-        if not self.enable_checkpoint:
+        if not self.enable_checkpoint or self.checkpoint_file is None:
+            return
+
+        checkpoint_interval = max(1, int(self.checkpoint_interval))
+        if processed_count < total_count and processed_count % checkpoint_interval != 0:
             return
 
         checkpoint_data = {
@@ -138,7 +138,12 @@ class SAMProcessor:
 
     def _load_checkpoint(self) -> dict:
         """Load checkpoint from JSON file."""
-        if not self.enable_resume or not self.checkpoint_file.exists():
+        if (
+            not self.enable_checkpoint
+            or not self.enable_resume
+            or self.checkpoint_file is None
+            or not self.checkpoint_file.exists()
+        ):
             return {"processed_count": 0, "total_count": 0}
 
         try:
@@ -185,27 +190,193 @@ class SAMProcessor:
             error_message=last_error or "Unknown error",
         )
 
+    def _get_memory_usage_gb(self) -> float:
+        """
+        Get current process max RSS memory usage in GB.
+
+        On macOS, ru_maxrss is bytes. On Linux, it's KB.
+        """
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if os.uname().sysname == "Darwin":
+            return usage / (1024**3)
+        return usage / (1024**2)
+
+    def _should_fallback_to_single_worker(self) -> bool:
+        """Check if memory usage exceeds configured limit."""
+        if not self.enable_memory_watch:
+            return False
+        if self.memory_limit_gb is None or self.memory_limit_gb <= 0:
+            return False
+        current_gb = self._get_memory_usage_gb()
+        if current_gb > self.memory_limit_gb:
+            logger.warning(
+                f"Memory usage {current_gb:.2f}GB exceeds limit "
+                f"{self.memory_limit_gb:.2f}GB, fallback to single-process mode."
+            )
+            return True
+        return False
+
+    def _update_image_cache(self, image_path: Path, image: np.ndarray) -> None:
+        """Insert image into simple FIFO cache."""
+        if not self.preload_images or self.image_cache_size <= 0:
+            return
+
+        cache_key = str(image_path)
+        if cache_key in self._image_cache:
+            return
+
+        self._image_cache[cache_key] = image
+        self._image_cache_order.append(cache_key)
+        while len(self._image_cache_order) > self.image_cache_size:
+            old_key = self._image_cache_order.pop(0)
+            self._image_cache.pop(old_key, None)
+
+    def _get_image(self, image_path: Path) -> Optional[np.ndarray]:
+        """Get image from cache or disk."""
+        cache_key = str(image_path)
+        if self.preload_images and cache_key in self._image_cache:
+            return self._image_cache[cache_key]
+
+        image = cv2.imread(str(image_path))
+        if image is not None:
+            self._update_image_cache(image_path, image)
+        return image
+
+    def _preload_batch_images(self, batch_data: List[DataItem]) -> None:
+        """Preload batch images up to cache size."""
+        if not self.preload_images or self.image_cache_size <= 0:
+            return
+        if self.num_workers > 1:
+            return
+
+        for item in batch_data[: self.image_cache_size]:
+            image_path = self.data_manager.images_dir / item.relative_path
+            if str(image_path) not in self._image_cache:
+                image = cv2.imread(str(image_path))
+                if image is not None:
+                    self._update_image_cache(image_path, image)
+
+    def _read_yolo_txt_labels(
+        self,
+        txt_path: Path,
+        image_path: Path,
+        image_height: int,
+        image_width: int,
+    ) -> Tuple[ImageInfo, List[BBoxShape]]:
+        """Read YOLO TXT labels and convert to bbox shapes."""
+        bbox_shapes: List[BBoxShape] = []
+
+        with open(txt_path, "r") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                parts = stripped.split()
+                if "|" in parts[0]:
+                    parts = parts[1:]
+
+                if len(parts) < 5:
+                    continue
+
+                class_id = parts[0]
+                try:
+                    x_center = float(parts[1])
+                    y_center = float(parts[2])
+                    width = float(parts[3])
+                    height = float(parts[4])
+                except ValueError:
+                    continue
+
+                x1 = max(0.0, (x_center - width / 2.0) * image_width)
+                y1 = max(0.0, (y_center - height / 2.0) * image_height)
+                x2 = min(float(image_width - 1), (x_center + width / 2.0) * image_width)
+                y2 = min(float(image_height - 1), (y_center + height / 2.0) * image_height)
+
+                class_label = class_id
+                try:
+                    class_label = str(int(float(class_id)))
+                except ValueError:
+                    pass
+
+                bbox_shapes.append(
+                    BBoxShape(
+                        label=f"class_{class_label}",
+                        points=[[x1, y1], [x2, y2]],
+                    )
+                )
+
+        image_info = ImageInfo(
+            image_path=image_path.name,
+            image_height=image_height,
+            image_width=image_width,
+        )
+        return image_info, bbox_shapes
+
+    def _read_label_file(
+        self,
+        label_path: Path,
+        image_path: Path,
+        image_height: int,
+        image_width: int,
+    ) -> Tuple[ImageInfo, List[BBoxShape]]:
+        """Read label file based on extension (.json or .txt)."""
+        suffix = label_path.suffix.lower()
+        if suffix == ".txt":
+            return self._read_yolo_txt_labels(
+                label_path, image_path, image_height, image_width
+            )
+        return LabelmeIO.read_bbox_json(label_path)
+
+    def _build_output_image_info(
+        self,
+        base_info: ImageInfo,
+        image_path: Path,
+        output_json_path: Path,
+    ) -> ImageInfo:
+        """Build output image info with imagePath relative to output JSON path."""
+        relative_image_path = os.path.relpath(image_path, start=output_json_path.parent)
+        return ImageInfo(
+            image_path=Path(relative_image_path).as_posix(),
+            image_height=base_info.image_height,
+            image_width=base_info.image_width,
+            version=base_info.version,
+            flags=base_info.flags,
+            image_data=base_info.image_data,
+        )
+
     def _process_single_item_internal(self, data_item: DataItem) -> ProcessingResult:
         """Internal method to process single item without retry logic."""
-        if self.skip_empty_labels:
-            try:
-                image_info, bbox_shapes = LabelmeIO.read_bbox_json(data_item.bbox_path)
-                if not bbox_shapes:
-                    logger.info(f"Skipping {data_item.image_id}: No bbox shapes found")
-                    return ProcessingResult(
-                        data_item=data_item, success=True, mask_shapes=[]
-                    )
-            except Exception as e:
-                logger.warning(f"Error reading bbox for {data_item.image_id}: {e}")
+        image_path = self.data_manager.images_dir / data_item.relative_path
+        label_path = data_item.bbox_path
+
+        if label_path is None or not label_path.exists():
+            return ProcessingResult(
+                data_item=data_item,
+                success=False,
+                error_message=f"BBox file not found: {label_path}",
+            )
 
         try:
-            image_info, bbox_shapes = LabelmeIO.read_bbox_json(data_item.bbox_path)
-            if not bbox_shapes:
+            image = self._get_image(image_path)
+            if image is None:
                 return ProcessingResult(
                     data_item=data_item,
                     success=False,
-                    error_message="No bbox shapes found",
+                    error_message=f"Failed to load image: {image_path}",
                 )
+            image_height, image_width = image.shape[:2]
+        except Exception as e:
+            return ProcessingResult(
+                data_item=data_item,
+                success=False,
+                error_message=f"Failed to load image: {e}",
+            )
+
+        try:
+            image_info, bbox_shapes = self._read_label_file(
+                label_path, image_path, image_height, image_width
+            )
         except Exception as e:
             return ProcessingResult(
                 data_item=data_item,
@@ -213,20 +384,16 @@ class SAMProcessor:
                 error_message=f"Failed to read bbox: {e}",
             )
 
-        try:
-            image_path = self.data_manager.images_dir / data_item.relative_path
-            image = cv2.imread(str(image_path))
-            if image is None:
+        if not bbox_shapes:
+            if self.skip_empty_labels:
+                logger.info(f"Skipping {data_item.image_id}: No bbox shapes found")
                 return ProcessingResult(
-                    data_item=data_item,
-                    success=False,
-                    error_message=f"Failed to load image: {image_path}",
+                    data_item=data_item, success=True, mask_shapes=[]
                 )
-        except Exception as e:
             return ProcessingResult(
                 data_item=data_item,
                 success=False,
-                error_message=f"Failed to load image: {e}",
+                error_message="No bbox shapes found",
             )
 
         try:
@@ -243,57 +410,8 @@ class SAMProcessor:
         try:
             mask_shapes = []
             for i, (bbox_shape, sam_result) in enumerate(zip(bbox_shapes, sam_results)):
-                contour = sam_result["contour"]
-
-                if self.simplification_enabled:
-                    contour_np = np.array(contour, dtype=np.float32)
-                    if len(contour_np.shape) == 2 and contour_np.shape[1] == 2:
-                        contour_np = contour_np.reshape(-1, 1, 2)
-
-                    if self.simplification_method == "adaptive":
-                        simplified_contour = simplify_polygon_adaptive(
-                            contour_np,
-                            base_epsilon_factor=self.simplification_params.get(
-                                "base_epsilon_factor", 0.005
-                            ),
-                            adaptive_factor=self.simplification_params.get(
-                                "adaptive_factor", 0.5
-                            ),
-                            min_points=self.simplification_params.get("min_points", 8),
-                            max_points=self.simplification_params.get("max_points", 50),
-                            curvature_window=self.simplification_params.get(
-                                "curvature_window", 5
-                            ),
-                        )
-                    elif self.simplification_method == "max_points":
-                        simplified_contour = simplify_contour_to_max_points(
-                            contour_np,
-                            max_points=self.simplification_params.get("max_points", 50),
-                        )
-                    else:
-                        simplified_contour = contour_np
-
-                    contour = simplified_contour
-
-                if hasattr(contour, "reshape"):
-                    contour = contour.reshape(-1, 2)
-                    points = contour.tolist()
-                elif hasattr(contour, "tolist"):
-                    points = contour.tolist()
-                    if (
-                        points
-                        and isinstance(points[0], list)
-                        and len(points[0]) > 0
-                        and isinstance(points[0][0], list)
-                    ):
-                        points = [[float(pt[0]), float(pt[1])] for pt in points]
-                else:
-                    points = contour
-
-                if not isinstance(points, list) or not all(
-                    isinstance(p, list) and len(p) == 2 for p in points
-                ):
-                    points = []
+                mask_array = np.array(sam_result.get("mask", []), dtype=np.uint8)
+                points, encoded_mask = LabelmeIO.mask_to_labelme_mask(mask_array)
 
                 mask_shapes.append(
                     MaskShape(
@@ -302,6 +420,8 @@ class SAMProcessor:
                         group_id=bbox_shape.group_id or i,
                         description="Generated by SAM",
                         flags={"sam_generated": True},
+                        shape_type="mask",
+                        mask=encoded_mask,
                     )
                 )
         except Exception as e:
@@ -315,8 +435,27 @@ class SAMProcessor:
             if self.output_separate:
                 mask_json_path = data_item.mask_path
                 mask_json_path.parent.mkdir(parents=True, exist_ok=True)
-                LabelmeIO.write_mask_json(mask_json_path, mask_shapes, image_info)
+                mask_image_info = self._build_output_image_info(
+                    image_info, image_path, mask_json_path
+                )
+                LabelmeIO.write_mask_json(mask_json_path, mask_shapes, mask_image_info)
                 logger.info(f"Saved mask to {mask_json_path}")
+
+            if self.output_combine and self.combined_dir is not None:
+                combined_json_path = (
+                    self.combined_dir / data_item.relative_path.with_suffix(".json")
+                )
+                combined_json_path.parent.mkdir(parents=True, exist_ok=True)
+                combined_image_info = self._build_output_image_info(
+                    image_info, image_path, combined_json_path
+                )
+                LabelmeIO.write_combined_json(
+                    combined_json_path,
+                    bbox_shapes,
+                    mask_shapes,
+                    combined_image_info,
+                )
+                logger.info(f"Saved combined output to {combined_json_path}")
         except Exception as e:
             return ProcessingResult(
                 data_item=data_item,
@@ -324,9 +463,7 @@ class SAMProcessor:
                 error_message=f"Failed to save mask: {e}",
             )
 
-        return ProcessingResult(
-            data_item=data_item, success=True, mask_shapes=mask_shapes
-        )
+        return ProcessingResult(data_item=data_item, success=True, mask_shapes=mask_shapes)
 
     def _process_batch_with_worker(
         self, batch_data: List[DataItem]
@@ -340,13 +477,18 @@ class SAMProcessor:
 
     def _get_batch_results(self, batch_data: List[DataItem]) -> List[ProcessingResult]:
         """Process a batch using multiprocessing pool."""
-        with Pool(processes=self.num_workers) as pool:
-            results = pool.map(
-                self._process_batch_with_worker,
-                [batch_data[i :: self.num_workers] for i in range(self.num_workers)],
+        try:
+            with Pool(processes=self.num_workers) as pool:
+                results = pool.map(
+                    self._process_batch_with_worker,
+                    [batch_data[i :: self.num_workers] for i in range(self.num_workers)],
+                )
+            return [result for batch_results in results for result in batch_results]
+        except Exception as e:
+            logger.warning(
+                f"Multiprocessing failed ({e}), fallback to single-process batch."
             )
-
-        return [result for batch_results in results for result in batch_results]
+            return [self._process_single_item(item) for item in batch_data]
 
     def process_single(self, data_item: DataItem) -> ProcessingResult:
         """
@@ -388,33 +530,59 @@ class SAMProcessor:
             return []
 
         checkpoint = self._load_checkpoint()
-        start_index = checkpoint.get("processed_count", 0)
+        start_index = int(checkpoint.get("processed_count", 0) or 0)
+        checkpoint_total = int(checkpoint.get("total_count", 0) or 0)
 
-        if start_index >= len(data_items):
+        if start_index < 0:
+            start_index = 0
+
+        # If input size differs from checkpoint total, treat checkpoint as stale.
+        # This happens when caller passes a filtered list (e.g., pending items only).
+        if checkpoint_total > 0 and checkpoint_total != len(data_items):
+            logger.warning(
+                f"Checkpoint total_count={checkpoint_total} does not match current "
+                f"items={len(data_items)}. Ignoring checkpoint progress."
+            )
+            start_index = 0
+
+        if start_index > len(data_items):
+            logger.warning(
+                f"Checkpoint processed_count={start_index} exceeds current "
+                f"items={len(data_items)}. Resetting to 0."
+            )
+            start_index = 0
+
+        if start_index == len(data_items):
             logger.info(f"All items already processed. Total: {start_index}")
             return []
 
+        total_count = len(data_items)
         data_items = data_items[start_index:]
-        total_count = start_index + len(data_items)
 
-        logger.info(f"Processing {len(data_items)} items (resuming from {start_index})")
+        logger.info(
+            f"Processing {len(data_items)} items (resuming from {start_index})"
+        )
         logger.info(f"Total dataset size: {total_count} items")
 
         results = []
         total_batches = (len(data_items) + self.batch_size - 1) // self.batch_size
 
         for batch_idx in range(total_batches):
-            batch_start = batch_idx * self.batch_size + start_index
-            batch_end = min(
-                batch_start + self.batch_size, len(data_items) + start_index
-            )
+            batch_start = batch_idx * self.batch_size
+            batch_end = min(batch_start + self.batch_size, len(data_items))
             batch_data = data_items[batch_start:batch_end]
+            global_batch_start = batch_start + start_index
+            global_batch_end = batch_end + start_index
 
             logger.info(
-                f"Processing batch {batch_idx + 1}/{total_batches}: items {batch_start + 1}-{batch_end}"
+                f"Processing batch {batch_idx + 1}/{total_batches}: "
+                f"items {global_batch_start + 1}-{global_batch_end}"
             )
 
-            if self.num_workers == 1:
+            self._preload_batch_images(batch_data)
+            use_single_worker = self.num_workers == 1 or self._should_fallback_to_single_worker()
+
+            if use_single_worker:
                 batch_results = [self._process_single_item(item) for item in batch_data]
             else:
                 batch_results = self._get_batch_results(batch_data)

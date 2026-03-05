@@ -66,6 +66,25 @@ class TestDataManager:
         bbox_path = dm.get_bbox_path(Path("img002.png"))
         assert not bbox_path.exists()
 
+    def test_associate_txt_label_files(self, tmp_path):
+        """Test: Associate YOLO TXT label files with custom extension."""
+        (tmp_path / "images").mkdir()
+        (tmp_path / "labels").mkdir()
+        (tmp_path / "mask").mkdir()
+
+        (tmp_path / "images" / "img001.jpg").touch()
+        (tmp_path / "labels" / "img001.txt").touch()
+
+        dm = DataManager(
+            tmp_path,
+            bbox_dir="labels",
+            bbox_extension=".txt",
+        )
+
+        bbox_path = dm.get_bbox_path(Path("img001.jpg"))
+        assert bbox_path.exists()
+        assert bbox_path.name == "img001.txt"
+
     def test_check_processing_status(self, temp_data_dir):
         """Test: Check processing status."""
         dm = DataManager(temp_data_dir)

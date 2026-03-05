@@ -9,17 +9,6 @@ sam:
 output:
   separate: true
   combine: false
-  format: "polygon"
-
-  # 多边形简化设置（基于曲率自适应）
-  polygon_simplification:
-    enabled: true
-    method: "adaptive"
-    base_epsilon_factor: 0.005
-    adaptive_factor: 0.5
-    min_points: 8
-    max_points: 50
-    curvature_window: 5
 
 # 数据路径
 data:

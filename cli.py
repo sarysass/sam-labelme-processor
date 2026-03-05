@@ -49,6 +49,7 @@ def cmd_process(args):
         images_dir=config.get("data.images_dir", "images"),
         bbox_dir=config.get("data.bbox_dir", "bbox"),
         mask_dir=config.get("data.mask_dir", "mask"),
+        bbox_extension=config.get("data.bbox_extension", ".json"),
     )
 
     # Create SAMWrapper
@@ -68,8 +69,16 @@ def cmd_process(args):
         combined_dir=Path(config.get("data.combined_dir", "output/combined")),
         batch_size=config.get("processing.batch_size", 20),
         num_workers=config.get("processing.num_workers", 2),
+        enable_checkpoint=config.get("processing.enable_checkpoint", True),
+        checkpoint_interval=config.get("processing.checkpoint_interval", 100),
         enable_resume=config.get("processing.enable_resume", True),
-        simplification_config=config.get("output.polygon_simplification"),
+        max_retries=config.get("processing.max_retries", 3),
+        retry_delay=config.get("processing.retry_delay", 5),
+        skip_empty_labels=config.get("processing.skip_empty_labels", True),
+        memory_limit_gb=config.get("processing.memory_limit_gb", 12),
+        enable_memory_watch=config.get("processing.enable_memory_watch", True),
+        preload_images=config.get("processing.preload_images", False),
+        image_cache_size=config.get("processing.image_cache_size", 10),
     )
 
     # Get pending items
@@ -113,6 +122,7 @@ def cmd_validate(args):
         images_dir=config.get("data.images_dir", "images"),
         bbox_dir=config.get("data.bbox_dir", "bbox"),
         mask_dir=config.get("data.mask_dir", "mask"),
+        bbox_extension=config.get("data.bbox_extension", ".json"),
     )
 
     items = data_manager.scan_dataset()
@@ -143,6 +153,7 @@ def cmd_stats(args):
         images_dir=config.get("data.images_dir", "images"),
         bbox_dir=config.get("data.bbox_dir", "bbox"),
         mask_dir=config.get("data.mask_dir", "mask"),
+        bbox_extension=config.get("data.bbox_extension", ".json"),
     )
 
     stats = data_manager.get_stats()

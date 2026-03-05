@@ -5,6 +5,7 @@ Labelme JSON I/O module.
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import json
+import base64
 from dataclasses import dataclass
 import numpy as np
 
@@ -29,11 +30,13 @@ class MaskShape:
     """Mask shape in Labelme format."""
 
     label: str
-    points: List[List[float]]  # Polygon points [[x, y], ...]
+    points: List[List[float]]  # Bounding points [[x1, y1], [x2, y2]]
     group_id: Optional[int] = None
     description: str = ""
     flags: Optional[Dict[str, bool]] = None
     area: float = 0.0
+    shape_type: str = "mask"
+    mask: Optional[str] = None
 
     def __post_init__(self):
         if self.flags is None:
@@ -118,9 +121,10 @@ class LabelmeIO:
                     "label": shape.label,
                     "points": shape.points,
                     "group_id": shape.group_id,
-                    "shape_type": "polygon",
+                    "shape_type": "mask",
                     "description": shape.description,
                     "flags": shape.flags,
+                    "mask": shape.mask,
                 }
             )
 
@@ -177,9 +181,10 @@ class LabelmeIO:
                     "label": shape.label,
                     "points": shape.points,
                     "group_id": shape.group_id,
-                    "shape_type": "polygon",
+                    "shape_type": "mask",
                     "description": shape.description,
                     "flags": shape.flags,
+                    "mask": shape.mask,
                 }
             )
 
@@ -200,40 +205,39 @@ class LabelmeIO:
             json.dump(data, f, indent=2)
 
     @staticmethod
-    def mask_to_polygon(mask: np.ndarray) -> List[List[float]]:
+    def mask_to_labelme_mask(mask: np.ndarray) -> Tuple[List[List[float]], str]:
         """
-        Convert mask array to polygon point list.
+        Convert binary mask to Labelme mask payload.
 
         Args:
             mask: Binary mask array (H, W).
 
         Returns:
-            List of points [[x, y], ...].
+            Tuple of points [[x1, y1], [x2, y2]] and base64 PNG mask.
         """
         try:
             import cv2
         except ImportError:
-            raise ImportError("OpenCV (cv2) is required for mask_to_polygon")
+            raise ImportError("OpenCV (cv2) is required for mask_to_labelme_mask")
 
-        # Ensure mask is uint8
-        if mask.dtype != np.uint8:
-            mask = mask.astype(np.uint8)
+        if mask.ndim != 2:
+            raise ValueError("Mask must be a 2D array")
 
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        binary_mask = (mask > 0).astype(np.uint8) * 255
+        ys, xs = np.where(binary_mask > 0)
+        if len(xs) == 0:
+            return [], ""
 
-        # Select largest contour
-        if len(contours) == 0:
-            return []
+        x1 = int(xs.min())
+        x2 = int(xs.max())
+        y1 = int(ys.min())
+        y2 = int(ys.max())
 
-        # Find largest contour by area
-        largest_contour = max(contours, key=cv2.contourArea)
+        cropped = binary_mask[y1 : y2 + 1, x1 : x2 + 1]
+        success, encoded = cv2.imencode(".png", cropped)
+        if not success:
+            raise ValueError("Failed to encode mask to PNG")
 
-        # Simplify contour (reduce number of points)
-        epsilon = 0.001 * cv2.arcLength(largest_contour, True)
-        approximated = cv2.approxPolyDP(largest_contour, epsilon, True)
-
-        # Convert to list of points
-        points = approximated.reshape(-1, 2).tolist()
-
-        return points
+        mask_b64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+        points = [[float(x1), float(y1)], [float(x2), float(y2)]]
+        return points, mask_b64

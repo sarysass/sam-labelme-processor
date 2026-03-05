@@ -9,13 +9,13 @@ sam:
 output:
   separate: true                   # 输出独立的 mask JSON 文件
   combine: false                   # 输出合并的 bbox+mask JSON 文件
-  format: "polygon"                # polygon, contour
 
 # 数据路径
 data:
   root: "./data/Benchmark_Dataset"
   images_dir: "images"
   bbox_dir: "labels"
+  bbox_extension: ".json"          # .json (Labelme bbox) 或 .txt (YOLO)
   mask_dir: "mask"
   combined_dir: "output/combined"
 

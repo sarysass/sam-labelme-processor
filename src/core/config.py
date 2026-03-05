@@ -21,21 +21,12 @@ class Config:
         "output": {
             "separate": True,
             "combine": False,
-            "format": "polygon",
-            "polygon_simplification": {
-                "enabled": True,
-                "method": "adaptive",
-                "base_epsilon_factor": 0.005,
-                "adaptive_factor": 0.5,
-                "min_points": 8,
-                "max_points": 50,
-                "curvature_window": 5,
-            },
         },
         "data": {
             "root": "./data",
             "images_dir": "images",
             "bbox_dir": "bbox",
+            "bbox_extension": ".json",
             "mask_dir": "mask",
             "combined_dir": "output/combined",
         },

@@ -114,12 +114,24 @@ output:
 data:
   root: "./data"                          # 数据根目录
   images_dir: "images"                     # 图像文件夹
-  bbox_dir: "bbox"                        # 边框文件夹
+  bbox_dir: "bbox"                        # 标签文件夹
+  bbox_extension: ".json"                 # .json(Labelme bbox) 或 .txt(YOLO)
   mask_dir: "mask"                        # mask 输出文件夹
 
 logging:
   level: "INFO"
   file: "logs/processor.log"
+```
+
+YOLO TXT 输入示例（与你当前 `data/select` 一致）：
+
+```yaml
+data:
+  root: "./data/select"
+  images_dir: "select images"
+  bbox_dir: "select labels"
+  bbox_extension: ".txt"
+  mask_dir: "select masks"
 ```
 
 ## 输出说明

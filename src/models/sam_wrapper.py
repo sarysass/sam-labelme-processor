@@ -15,12 +15,20 @@ if str(MICROHUNTER_PATH) not in sys.path:
     sys.path.insert(0, str(MICROHUNTER_PATH))
 
 try:
+    # Legacy MicroHunter API path
     from microhunter.core.sam import UltralyticsSAMPredictor
     MICROHUNTER_AVAILABLE = True
 except ImportError:
-    logger.warning("MicroHunter not available. SAM functionality will be limited.")
-    MICROHUNTER_AVAILABLE = False
-    UltralyticsSAMPredictor = None
+    try:
+        # Newer MicroHunter API path
+        from microhunter.core.detector.sam import (
+            SAMPredictor as UltralyticsSAMPredictor,
+        )
+        MICROHUNTER_AVAILABLE = True
+    except ImportError:
+        logger.warning("MicroHunter not available. SAM functionality will be limited.")
+        MICROHUNTER_AVAILABLE = False
+        UltralyticsSAMPredictor = None
 
 
 class SAMWrapper:

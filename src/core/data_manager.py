@@ -58,7 +58,8 @@ class DataManager:
         data_root: Path,
         images_dir: str = "images",
         bbox_dir: str = "bbox",
-        mask_dir: str = "mask"
+        mask_dir: str = "mask",
+        bbox_extension: str = ".json",
     ):
         """
         Initialize DataManager.
@@ -68,11 +69,17 @@ class DataManager:
             images_dir: Images subdirectory name.
             bbox_dir: BBox subdirectory name.
             mask_dir: Mask subdirectory name.
+            bbox_extension: Label file extension (e.g., '.json', '.txt').
         """
         self.data_root = Path(data_root)
         self.images_dir = self.data_root / images_dir
         self.bbox_dir = self.data_root / bbox_dir
         self.mask_dir = self.data_root / mask_dir
+        self.bbox_extension = (
+            bbox_extension
+            if bbox_extension.startswith(".")
+            else f".{bbox_extension}"
+        )
 
         # Ensure directories exist
         self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -100,9 +107,9 @@ class DataManager:
             relative_image_path: Path relative to images/, e.g., Path("subfolder/img001.jpg").
 
         Returns:
-            Absolute path to bbox JSON, e.g., data/bbox/subfolder/img001.json.
+            Absolute path to label file, e.g., data/bbox/subfolder/img001.json.
         """
-        return self.bbox_dir / relative_image_path.with_suffix('.json')
+        return self.bbox_dir / relative_image_path.with_suffix(self.bbox_extension)
 
     def get_mask_path(self, relative_image_path: Path) -> Path:
         """
