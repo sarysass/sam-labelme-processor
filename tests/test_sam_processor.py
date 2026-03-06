@@ -88,6 +88,7 @@ class TestSAMProcessor:
 
         assert result.success is True
         assert len(result.mask_shapes) == 1
+        assert result.mask_shapes[0].label == "mask"
         assert result.data_item.image_id == "test"
 
         # Verify mask file was created
@@ -143,6 +144,7 @@ class TestSAMProcessor:
 
         data = json.loads(output_json.read_text())
         assert len(data["shapes"]) == 1
+        assert data["shapes"][0]["label"] == "mask"
         assert data["shapes"][0]["shape_type"] == "mask"
         assert len(data["shapes"][0]["points"]) == 2
         assert isinstance(data["shapes"][0]["mask"], str)
