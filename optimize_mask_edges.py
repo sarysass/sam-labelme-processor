@@ -71,6 +71,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-area-ratio", type=float, default=1.5)
     parser.add_argument("--smoothing-kernel-size", type=int, default=5)
     parser.add_argument("--smoothing-morph-radius", type=int, default=1)
+    parser.add_argument("--enable-cavity-recovery", action="store_true")
+    parser.add_argument("--cavity-min-area", type=int, default=25)
+    parser.add_argument("--cavity-min-distance", type=int, default=2)
+    parser.add_argument("--cavity-intensity-margin", type=float, default=5.0)
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -99,6 +103,10 @@ def main() -> int:
         max_area_ratio=args.max_area_ratio,
         smoothing_kernel_size=args.smoothing_kernel_size,
         smoothing_morph_radius=args.smoothing_morph_radius,
+        enable_cavity_recovery=args.enable_cavity_recovery,
+        cavity_min_area=args.cavity_min_area,
+        cavity_min_distance=args.cavity_min_distance,
+        cavity_intensity_margin=args.cavity_intensity_margin,
     )
 
     json_files = collect_json_files(input_path)

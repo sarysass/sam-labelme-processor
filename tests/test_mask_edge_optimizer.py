@@ -161,3 +161,67 @@ class TestMaskEdgeOptimizer:
         assert _boundary_complexity(smoothed) < _boundary_complexity(mask)
         area_ratio = float(np.count_nonzero(smoothed)) / float(np.count_nonzero(mask))
         assert 0.8 <= area_ratio <= 1.2
+
+    def test_refine_mask_with_cavity_recovery_restores_enclosed_hole(self):
+        """Test: Cavity recovery reopens enclosed background inside a filled mask."""
+        image = np.full((100, 100, 3), 180, dtype=np.uint8)
+        target_mask = np.zeros((100, 100), dtype=np.uint8)
+        input_mask = np.zeros((100, 100), dtype=np.uint8)
+
+        cv2.circle(target_mask, (50, 50), 20, 1, -1)
+        cv2.circle(target_mask, (50, 50), 9, 0, -1)
+        cv2.circle(input_mask, (50, 50), 20, 1, -1)
+
+        image[target_mask > 0] = (60, 60, 60)
+
+        config = EdgeOptimizationConfig(
+            search_radius=6,
+            foreground_erode=4,
+            background_dilate=2,
+            gaussian_kernel_size=3,
+            canny_low_threshold=1000,
+            canny_high_threshold=2000,
+            min_area_ratio=0.3,
+            max_area_ratio=1.5,
+            smoothing_kernel_size=3,
+            smoothing_morph_radius=0,
+            enable_cavity_recovery=True,
+            cavity_min_area=25,
+            cavity_min_distance=2,
+            cavity_intensity_margin=5.0,
+        )
+
+        refined_mask = refine_mask_with_edges(image, input_mask, config)
+
+        assert _iou(refined_mask, target_mask) > _iou(input_mask, target_mask)
+
+    def test_refine_mask_with_cavity_recovery_preserves_valid_solid_mask(self):
+        """Test: Cavity recovery does not carve a hole from a valid solid object."""
+        image = np.full((100, 100, 3), 180, dtype=np.uint8)
+        target_mask = np.zeros((100, 100), dtype=np.uint8)
+        input_mask = np.zeros((100, 100), dtype=np.uint8)
+
+        cv2.circle(target_mask, (50, 50), 20, 1, -1)
+        input_mask[:] = target_mask
+        image[target_mask > 0] = (60, 60, 60)
+
+        config = EdgeOptimizationConfig(
+            search_radius=6,
+            foreground_erode=4,
+            background_dilate=2,
+            gaussian_kernel_size=3,
+            canny_low_threshold=1000,
+            canny_high_threshold=2000,
+            min_area_ratio=0.3,
+            max_area_ratio=1.5,
+            smoothing_kernel_size=3,
+            smoothing_morph_radius=0,
+            enable_cavity_recovery=True,
+            cavity_min_area=25,
+            cavity_min_distance=2,
+            cavity_intensity_margin=5.0,
+        )
+
+        refined_mask = refine_mask_with_edges(image, input_mask, config)
+
+        assert np.array_equal(refined_mask, input_mask)

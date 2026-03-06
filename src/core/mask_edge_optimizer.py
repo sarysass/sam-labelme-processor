@@ -31,6 +31,10 @@ class EdgeOptimizationConfig:
     max_area_ratio: float = 1.5
     smoothing_kernel_size: int = 5
     smoothing_morph_radius: int = 1
+    enable_cavity_recovery: bool = False
+    cavity_min_area: int = 25
+    cavity_min_distance: int = 2
+    cavity_intensity_margin: float = 5.0
 
 
 def _odd_kernel_size(kernel_size: int) -> int:
@@ -135,6 +139,117 @@ def smooth_binary_mask(
     return smoothed
 
 
+def _connected_component_count(mask: np.ndarray) -> int:
+    """Count connected foreground components in a binary mask."""
+    binary_mask = (mask > 0).astype(np.uint8)
+    component_count, _labels = cv2.connectedComponents(binary_mask)
+    return max(0, int(component_count) - 1)
+
+
+def _find_enclosed_holes(mask: np.ndarray) -> np.ndarray:
+    """Find enclosed background holes inside a binary mask."""
+    binary_mask = (mask > 0).astype(np.uint8)
+    inverse_mask = (binary_mask == 0).astype(np.uint8)
+    component_count, labels = cv2.connectedComponents(inverse_mask)
+    if component_count <= 1:
+        return np.zeros_like(binary_mask)
+
+    border_labels = set(labels[0, :]) | set(labels[-1, :]) | set(labels[:, 0]) | set(labels[:, -1])
+    holes = np.zeros_like(binary_mask)
+    for component_id in range(1, component_count):
+        if component_id in border_labels:
+            continue
+        holes[labels == component_id] = 1
+    return holes
+
+
+def recover_internal_cavities(
+    image: np.ndarray,
+    mask: np.ndarray,
+    config: EdgeOptimizationConfig,
+) -> np.ndarray:
+    """
+    Reopen enclosed background regions that were incorrectly filled inside a mask.
+
+    Args:
+        image: Source image patch in BGR or grayscale format.
+        mask: Binary mask with values 0 or 1.
+        config: Optimization parameters.
+
+    Returns:
+        Binary mask with enclosed cavity candidates removed when safe.
+    """
+    binary_mask = (mask > 0).astype(np.uint8)
+    if not config.enable_cavity_recovery or np.count_nonzero(binary_mask) == 0:
+        return binary_mask
+
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+    gray = gray.astype(np.float32)
+
+    outside_ring = cv2.dilate(binary_mask, _ellipse_kernel(1)) - binary_mask
+    if np.count_nonzero(outside_ring) == 0:
+        return binary_mask
+
+    background_reference = float(np.median(gray[outside_ring > 0]))
+
+    foreground_seed = cv2.erode(
+        binary_mask,
+        _ellipse_kernel(max(1, int(config.cavity_min_distance))),
+    )
+    if np.count_nonzero(foreground_seed) == 0:
+        foreground_seed = binary_mask
+    foreground_reference = float(np.median(gray[foreground_seed > 0]))
+
+    if abs(background_reference - foreground_reference) < float(config.cavity_intensity_margin):
+        return binary_mask
+
+    distance_inside = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+    candidate_region = np.logical_and(
+        binary_mask > 0,
+        distance_inside >= max(1, int(config.cavity_min_distance)),
+    )
+    if not np.any(candidate_region):
+        return binary_mask
+
+    background_distance = np.abs(gray - background_reference)
+    foreground_distance = np.abs(gray - foreground_reference)
+    cavity_candidates = np.logical_and(
+        candidate_region,
+        background_distance + float(config.cavity_intensity_margin) < foreground_distance,
+    ).astype(np.uint8)
+    if np.count_nonzero(cavity_candidates) == 0:
+        return binary_mask
+
+    component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        cavity_candidates,
+        connectivity=8,
+    )
+    refined_mask = binary_mask.copy()
+    original_components = _connected_component_count(binary_mask)
+    for component_id in range(1, component_count):
+        area = int(stats[component_id, cv2.CC_STAT_AREA])
+        if area < int(config.cavity_min_area):
+            continue
+
+        component_mask = labels == component_id
+        expanded_component = cv2.dilate(component_mask.astype(np.uint8), _ellipse_kernel(1))
+        if np.any(np.logical_and(expanded_component > 0, binary_mask == 0)):
+            continue
+
+        removal_mask = component_mask.astype(np.uint8)
+        candidate_mask = refined_mask.copy()
+        candidate_mask[removal_mask > 0] = 0
+        if _connected_component_count(candidate_mask) != original_components:
+            continue
+
+        refined_mask = candidate_mask
+
+    return refined_mask
+
+
 def refine_mask_with_edges(
     image: np.ndarray,
     mask: np.ndarray,
@@ -182,36 +297,39 @@ def refine_mask_with_edges(
         threshold1=int(config.canny_low_threshold),
         threshold2=int(config.canny_high_threshold),
     )
-    if np.count_nonzero(edges) == 0:
+    if np.count_nonzero(edges) == 0 and not config.enable_cavity_recovery:
         return original_mask
 
-    # Brighten edge pixels to make the watershed boundary more likely to settle there.
-    guided_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    guided_image[edges > 0] = (255, 255, 255)
+    refined_local = local_mask.copy()
+    if np.count_nonzero(edges) > 0:
+        # Brighten edge pixels to make the watershed boundary more likely to settle there.
+        guided_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        guided_image[edges > 0] = (255, 255, 255)
 
-    sure_foreground = cv2.erode(local_mask, _ellipse_kernel(config.foreground_erode))
-    allowed_region = cv2.dilate(local_mask, _ellipse_kernel(config.background_dilate))
+        sure_foreground = cv2.erode(local_mask, _ellipse_kernel(config.foreground_erode))
+        allowed_region = cv2.dilate(local_mask, _ellipse_kernel(config.background_dilate))
 
-    markers = np.zeros(local_mask.shape, dtype=np.int32)
-    markers[allowed_region == 0] = 1
-    markers[sure_foreground > 0] = 2
-    markers[0, :] = 1
-    markers[-1, :] = 1
-    markers[:, 0] = 1
-    markers[:, -1] = 1
+        markers = np.zeros(local_mask.shape, dtype=np.int32)
+        markers[allowed_region == 0] = 1
+        markers[sure_foreground > 0] = 2
+        markers[0, :] = 1
+        markers[-1, :] = 1
+        markers[:, 0] = 1
+        markers[:, -1] = 1
 
-    markers = cv2.watershed(guided_image.copy(), markers)
-    refined_local = (markers == 2).astype(np.uint8)
-    refined_local = cv2.morphologyEx(
-        refined_local,
-        cv2.MORPH_CLOSE,
-        _ellipse_kernel(1),
-    )
+        markers = cv2.watershed(guided_image.copy(), markers)
+        refined_local = (markers == 2).astype(np.uint8)
+        refined_local = cv2.morphologyEx(
+            refined_local,
+            cv2.MORPH_CLOSE,
+            _ellipse_kernel(1),
+        )
     refined_local = smooth_binary_mask(
         refined_local,
         blur_kernel_size=config.smoothing_kernel_size,
         morph_radius=config.smoothing_morph_radius,
     )
+    refined_local = recover_internal_cavities(local_image, refined_local, config)
 
     original_area = int(np.count_nonzero(local_mask))
     refined_area = int(np.count_nonzero(refined_local))
