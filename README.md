@@ -1,129 +1,63 @@
 # SAM Labelme 处理器
 
-使用 SAM（Segment Anything Model）批量处理带边框的图像，生成 mask 并以 Labelme JSON 格式输出。
+使用本地 `Ultralytics SAM` 根据 bbox 批量生成 Labelme `mask` JSON，并支持对已有 mask 做边缘辅助后处理。
 
-## 功能特性
+## 当前能力
 
-- **批处理**：一次处理多张图像，支持进度跟踪
-- **增量处理**：使用 `--resume` 标志跳过已处理的文件
-- **灵活输出**：输出独立的 mask 文件或合并的 bbox+mask 文件
-- **数据集验证**：处理前验证数据集结构
-- **统计信息**：查看数据集统计（总图像数、已处理、待处理）
-- **TDD 开发**：采用严格的 TDD 方法论构建
+- 批量读取图片和 bbox 标签
+- 支持 Labelme `rectangle` JSON 和 YOLO `.txt` 输入
+- 调用本项目内置 SAM backend 生成初始 mask
+- 输出独立 mask JSON 或 bbox+mask 合并 JSON
+- 支持 checkpoint、resume、重试、基础内存保护
+- 支持已有 mask 的后处理优化：
+  - 边缘贴合
+  - 内部空腔恢复
+  - 薄壳残留去除
 
-## 安装
-
-### 前置条件
+## 依赖
 
 - Python 3.10+
-- MicroHunter（用于 SAM 模型）
-  - 从本地安装 MicroHunter 项目
+- `ultralytics`
+- `opencv-python`
+- `numpy`
 
-### 设置步骤
+安装：
 
-1. 克隆或导航到项目目录：
-   ```bash
-   cd /path/to/sam-labelme-processor
-   ```
-
-2. 创建并激活虚拟环境：
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-3. 安装依赖：
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. 配置项目：
-   ```bash
-   # 复制配置文件模板
-   cp config.yaml.example config.yaml
-
-   # 编辑 config.yaml，设置正确的路径和参数
-   # 重点关注：
-   # - sam.weights: SAM 模型权重文件路径
-   # - sam.device: 根据你的硬件设置 (mps/cuda/cpu)
-   # - data.root: 数据集根目录
-   ```
-
-## 使用方法
-
-### 数据目录结构
-
-按照以下结构准备数据目录：
-```
-data/
-├── images/
-│   ├── frame_001.jpg
-│   └── frame_002.jpg
-└── bbox/
-    ├── frame_001.json
-    └── frame_002.json
-```
-
-### 命令
-
-#### 验证数据集
-检查数据集结构是否有效：
 ```bash
-python cli.py validate
+pip install -r requirements.txt
 ```
 
-#### 查看统计信息
-显示数据集统计：
+## 配置
+
+复制模板：
+
 ```bash
-python cli.py stats
+cp config.yaml.example config.yaml
 ```
 
-#### 处理图像
-为所有待处理的图像生成 mask：
-```bash
-python cli.py process
-```
-
-#### 恢复处理
-跳过已处理的图像：
-```bash
-python cli.py process --resume
-```
-
-#### 自定义数据目录
-使用自定义数据目录：
-```bash
-python cli.py process --data-dir /path/to/data
-```
-
-## 配置说明
-
-编辑 `config.yaml` 进行自定义配置：
+关键配置：
 
 ```yaml
 sam:
-  weights: "/path/to/sam/weights.pt"  # SAM 模型权重路径
-  device: "auto"                        # auto, cuda:0, cpu, mps
+  weights: "weights/sam2.1_t.pt"
+  device: "auto"
   imgsz: 1024
   iou_threshold: 0.3
 
 output:
-  separate: true                          # 输出独立的 mask JSON
-  combine: false                          # 输出合并的 bbox+mask JSON
+  separate: true
+  combine: false
 
 data:
-  root: "./data"                          # 数据根目录
-  images_dir: "images"                     # 图像文件夹
-  bbox_dir: "bbox"                        # 标签文件夹
-  bbox_extension: ".json"                 # .json(Labelme bbox) 或 .txt(YOLO)
-  mask_dir: "mask"                        # mask 输出文件夹
-
-logging:
-  level: "INFO"
-  file: "logs/processor.log"
+  root: "./data"
+  images_dir: "images"
+  bbox_dir: "bbox"
+  bbox_extension: ".json"
+  mask_dir: "mask"
+  combined_dir: "output/combined"
 ```
 
-YOLO TXT 输入示例（与你当前 `data/select` 一致）：
+YOLO TXT 示例：
 
 ```yaml
 data:
@@ -134,76 +68,92 @@ data:
   mask_dir: "select masks"
 ```
 
-## 输出说明
+## CLI
 
-处理后，mask 将生成在：
-```
-data/
-├── images/
-├── bbox/
-└── mask/                    # 生成的 mask JSON 文件
-    ├── frame_001.json
-    └── frame_002.json
-```
-
-## 开发
-
-### 运行测试
+验证数据集：
 
 ```bash
-# 运行所有测试
-pytest tests/ -v
-
-# 运行特定模块测试
-pytest tests/test_config.py -v
-
-# 生成覆盖率报告
-pytest tests/ --cov=src --cov-report=html
+python cli.py validate
 ```
 
-### TDD 工作流程
+查看统计：
 
-本项目严格遵循 TDD 开发：
-1. **RED**：编写失败的测试
-2. **GREEN**：实现代码使测试通过
-3. **REFACTOR**：重构优化，保持测试通过
+```bash
+python cli.py stats
+```
+
+批量生成 mask：
+
+```bash
+python cli.py process
+```
+
+恢复处理：
+
+```bash
+python cli.py process --resume
+```
+
+## 后处理 CLI
+
+对已有 Labelme mask JSON 做优化：
+
+```bash
+python optimize_mask_edges.py \
+  --input data/select/select_masks_opt/0002/0988-5.json \
+  --output data/select/tmp_refined/0002/0988-5.json \
+  --enable-cavity-recovery
+```
+
+常用开关：
+
+- `--enable-cavity-recovery`
+- `--enable-shell-removal`
+- `--shell-max-thickness`
+- `--shell-background-cost-multiplier`
+
+## 4 步算法链
+
+1. SAM 初始分割
+2. 边缘辅助贴合
+3. 内部空腔恢复
+4. 薄壳残留去除
 
 ## 项目结构
 
-```
+```text
 sam-labelme-processor/
-├── cli.py                      # CLI 入口
-├── config.yaml                 # 配置文件
-├── config.yaml.example          # 配置文件模板
-├── requirements.txt             # 依赖列表
-├── README.md                  # 项目说明
-├── AGENTS.md                  # Agent 开发指南
+├── cli.py
+├── optimize_mask_edges.py
 ├── src/
-│   ├── __init__.py
 │   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py          # 配置管理
-│   │   ├── data_manager.py    # 数据集管理
-│   │   ├── labelme_io.py     # Labelme JSON I/O
-│   │   └── sam_processor.py   # 主处理逻辑
-│   └── models/
-│       ├── __init__.py
-│       └── sam_wrapper.py    # SAM 模型封装
-├── tests/
-│   ├── __init__.py
-│   ├── test_config.py
-│   ├── test_data_manager.py
-│   ├── test_labelme_io.py
-│   ├── test_sam_processor.py
-│   └── test_sam_wrapper.py
-└── examples/
-    └── sample_config.yaml
+│   │   ├── config.py
+│   │   ├── data_manager.py
+│   │   ├── types.py
+│   │   ├── label_reader.py
+│   │   ├── result_writer.py
+│   │   ├── item_processor.py
+│   │   ├── batch_runner.py
+│   │   ├── sam_processor.py
+│   │   └── labelme_io.py
+│   ├── models/
+│   │   ├── sam_backend.py
+│   │   ├── sam_wrapper.py
+│   │   └── ultralytics_sam_backend.py
+│   └── postprocess/
+│       ├── edge_refiner.py
+│       └── labelme_adapter.py
+└── tests/
 ```
 
-## 许可证
+## 测试
 
-MIT License
+```bash
+pytest tests/ -q
+```
 
-## 作者
+## 架构说明
 
-采用 TDD 方法论和 Context7 最佳实践开发。
+更详细的模块关系见：
+
+- [docs/architecture.md](/Users/shali/projects/tools/sam-labelme-processor/docs/architecture.md)

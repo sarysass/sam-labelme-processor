@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from src.core.labelme_io import LabelmeIO
 from src.core.mask_edge_optimizer import (
     EdgeOptimizationConfig,
+    build_output_path,
+    collect_json_files,
     decode_labelme_mask,
+    default_output_path,
     optimize_labelme_mask_file,
     refine_mask_with_edges,
     smooth_binary_mask,
@@ -44,6 +47,12 @@ def _boundary_complexity(mask: np.ndarray) -> int:
 
 class TestMaskEdgeOptimizer:
     """Tests for edge-assisted mask optimization helpers."""
+
+    def test_core_module_reexports_postprocess_api(self):
+        """Test: Legacy import path continues to expose the optimizer API."""
+        assert callable(refine_mask_with_edges)
+        assert callable(optimize_labelme_mask_file)
+        assert EdgeOptimizationConfig is not None
 
     @staticmethod
     def _synthetic_refine_config() -> EdgeOptimizationConfig:
@@ -145,6 +154,34 @@ class TestMaskEdgeOptimizer:
             output_data["imageWidth"],
         )
         assert _iou(output_mask, target_mask) > _iou(input_mask, target_mask)
+
+    def test_default_output_path_for_single_file_uses_sibling_name(self, tmp_path):
+        """Test: Single-file default output path stays beside the input JSON."""
+        input_json = tmp_path / "sample.json"
+        input_json.write_text("{}")
+
+        output_path = default_output_path(input_json)
+
+        assert output_path == tmp_path / "sample.edge_optimized.json"
+
+    def test_build_output_path_preserves_relative_structure(self, tmp_path):
+        """Test: Directory output keeps the input-relative path."""
+        input_root = tmp_path / "input"
+        output_root = tmp_path / "output"
+        input_json = input_root / "0002" / "0988-5.json"
+        input_json.parent.mkdir(parents=True)
+        input_json.write_text("{}")
+
+        output_path = build_output_path(input_json, input_root, output_root)
+
+        assert output_path == output_root / "0002" / "0988-5.json"
+
+    def test_collect_json_files_returns_single_file_path(self, tmp_path):
+        """Test: File input is returned as a single-item list."""
+        input_json = tmp_path / "sample.json"
+        input_json.write_text("{}")
+
+        assert collect_json_files(input_json) == [input_json]
 
     def test_smooth_binary_mask_reduces_boundary_complexity(self):
         """Test: Binary mask smoothing reduces stair-step boundary complexity."""

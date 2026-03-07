@@ -17,8 +17,8 @@ except ImportError:
         """Fallback iterator when tqdm is unavailable."""
         return iterable
 
-from src.core.mask_edge_optimizer import (
-    EdgeOptimizationConfig,
+from src.postprocess.edge_refiner import EdgeOptimizationConfig
+from src.postprocess.labelme_adapter import (
     build_output_path,
     collect_json_files,
     default_output_path,

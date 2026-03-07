@@ -1,155 +1,108 @@
 """
 Tests for SAM wrapper module.
 """
-import pytest
-import numpy as np
-from unittest.mock import Mock, patch, MagicMock
 
-# Import the module to test
-import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+import numpy as np
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.models.sam_wrapper import SAMWrapper
 
 
 class TestSAMWrapper:
-    """Tests for SAMWrapper class."""
+    """Tests for SAMWrapper facade behavior."""
 
-    @pytest.fixture
-    def mock_sam_predictor(self):
-        """Mock MicroHunter's SAM Predictor."""
-        with patch('src.models.sam_wrapper.UltralyticsSAMPredictor') as MockPredictor:
-            # Create mock instance
-            mock_instance = MagicMock()
-
-            # Set mock return values
-            mock_result = Mock()
-            mock_result.masks = Mock()
-            mock_result.masks.data = np.array([
-                np.random.randint(0, 2, (100, 100), dtype=np.uint8)
-            ])
-            mock_result.masks.xy = [
-                np.array([[10, 10], [20, 10], [20, 20], [10, 20]])
-            ]
-
-            mock_instance.predict.return_value = {
-                'masks': mock_result.masks.data,
-                'contours': mock_result.masks.xy
-            }
-
-            MockPredictor.return_value = mock_instance
-            yield MockPredictor, mock_instance
-
-    def test_initialization(self, mock_sam_predictor):
-        """Test: Initialization parameters."""
+    def test_initialization(self):
+        """Test: Initialization stores constructor parameters and lazy state."""
+        backend = MagicMock()
         wrapper = SAMWrapper(
             weights="/path/to/sam.pt",
             device="cuda:0",
             imgsz=512,
-            iou_threshold=0.5
+            iou_threshold=0.5,
+            backend=backend,
         )
 
         assert wrapper.weights == "/path/to/sam.pt"
         assert wrapper.device == "cuda:0"
         assert wrapper.imgsz == 512
         assert wrapper.iou_threshold == 0.5
-        assert wrapper.predictor is None  # Lazy loading
+        assert wrapper.predictor is None
 
-    def test_load_model(self, mock_sam_predictor):
-        """Test: Load model."""
-        MockPredictor, mock_instance = mock_sam_predictor
+    def test_load_model(self):
+        """Test: load_model delegates to the configured backend."""
+        backend = MagicMock()
+        wrapper = SAMWrapper(weights="weights/sam.pt", backend=backend)
 
-        wrapper = SAMWrapper(weights="weights/sam.pt")
         wrapper.load_model()
 
-        # Verify UltralyticsSAMPredictor was called
-        MockPredictor.assert_called_once_with(
-            weights="weights/sam.pt",
-            device=None
-        )
-        assert wrapper.predictor is mock_instance
+        backend.load_model.assert_called_once_with()
+        assert wrapper.predictor is backend
 
-    def test_predict_single_bbox(self, mock_sam_predictor):
-        """Test: Single bbox inference."""
-        MockPredictor, mock_instance = mock_sam_predictor
-
-        wrapper = SAMWrapper()
-
-        # Create test image
+    def test_predict_single_bbox(self):
+        """Test: Single-bbox inference goes through the backend."""
+        backend = MagicMock()
+        backend.predict.return_value = [
+            {
+                "mask": np.random.randint(0, 2, (100, 100), dtype=np.uint8),
+                "contour": np.array([[10, 10], [20, 10], [20, 20], [10, 20]]),
+                "bbox": [10, 10, 50, 50],
+            }
+        ]
+        wrapper = SAMWrapper(backend=backend)
         image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
         bboxes = [[10, 10, 50, 50]]
 
         results = wrapper.predict(image, bboxes)
 
-        # Verify results
+        backend.load_model.assert_called_once_with()
+        backend.predict.assert_called_once_with(image, bboxes)
         assert len(results) == 1
-        assert 'mask' in results[0]
-        assert 'contour' in results[0]
-        assert 'bbox' in results[0]
-        assert results[0]['bbox'] == [10, 10, 50, 50]
+        assert results[0]["bbox"] == [10, 10, 50, 50]
 
-        # Verify predict was called
-        mock_instance.predict.assert_called_once()
-        call_args = mock_instance.predict.call_args
-        assert call_args[1]['source'] is image
-        assert call_args[1]['bboxes'] == bboxes
-
-    def test_predict_multiple_bboxes(self, mock_sam_predictor):
-        """Test: Multiple bbox inference."""
-        MockPredictor, mock_instance = mock_sam_predictor
-
-        # Set multiple results mock
-        mock_result = Mock()
-        mock_result.masks = Mock()
-        mock_result.masks.data = np.array([
-            np.random.randint(0, 2, (100, 100), dtype=np.uint8),
-            np.random.randint(0, 2, (100, 100), dtype=np.uint8)
-        ])
-        mock_result.masks.xy = [
-            np.array([[10, 10], [20, 10], [20, 20]]),
-            np.array([[30, 30], [40, 30], [40, 40]])
+    def test_predict_multiple_bboxes(self):
+        """Test: Multiple bboxes preserve order through the backend facade."""
+        backend = MagicMock()
+        backend.predict.return_value = [
+            {"mask": np.zeros((10, 10), dtype=np.uint8), "contour": np.array([[1, 1]]), "bbox": [1, 1, 2, 2]},
+            {"mask": np.ones((10, 10), dtype=np.uint8), "contour": np.array([[2, 2]]), "bbox": [3, 3, 4, 4]},
         ]
-
-        mock_instance.predict.return_value = {
-            'masks': mock_result.masks.data,
-            'contours': mock_result.masks.xy
-        }
-
-        wrapper = SAMWrapper()
-
-        image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
-        bboxes = [[10, 10, 30, 30], [40, 40, 60, 60]]
+        wrapper = SAMWrapper(backend=backend)
+        image = np.random.randint(0, 255, (10, 10, 3), dtype=np.uint8)
+        bboxes = [[1, 1, 2, 2], [3, 3, 4, 4]]
 
         results = wrapper.predict(image, bboxes)
 
         assert len(results) == 2
-        assert results[0]['bbox'] == [10, 10, 30, 30]
-        assert results[1]['bbox'] == [40, 40, 60, 60]
+        assert results[0]["bbox"] == [1, 1, 2, 2]
+        assert results[1]["bbox"] == [3, 3, 4, 4]
 
-    def test_context_manager(self, mock_sam_predictor):
-        """Test: Context manager."""
-        MockPredictor, mock_instance = mock_sam_predictor
+    def test_context_manager(self):
+        """Test: Context manager loads model and returns wrapper."""
+        backend = MagicMock()
 
-        with SAMWrapper() as wrapper:
-            assert wrapper.predictor is mock_instance
+        with SAMWrapper(backend=backend) as wrapper:
+            assert wrapper.predictor is backend
 
-        # Verify model was loaded
-        MockPredictor.assert_called_once()
+        backend.load_model.assert_called_once_with()
 
-    def test_predict_without_loading(self, mock_sam_predictor):
-        """Test: Auto-load model when not loaded."""
-        MockPredictor, mock_instance = mock_sam_predictor
+    def test_default_backend_is_local_ultralytics_backend(self):
+        """Test: Default wrapper backend is the local Ultralytics backend."""
+        with patch("src.models.sam_wrapper.UltralyticsSAMBackend") as backend_cls:
+            backend = MagicMock()
+            backend_cls.return_value = backend
 
-        wrapper = SAMWrapper()
-        assert wrapper.predictor is None
+            wrapper = SAMWrapper(weights="weights/model.pt", device="cpu", imgsz=640, iou_threshold=0.2)
 
-        image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
-        bboxes = [[10, 10, 50, 50]]
-
-        # Should auto-load model
-        results = wrapper.predict(image, bboxes)
-
-        MockPredictor.assert_called_once()
-        assert len(results) == 1
+            backend_cls.assert_called_once_with(
+                weights="weights/model.pt",
+                device="cpu",
+                imgsz=640,
+                iou_threshold=0.2,
+            )
+            assert wrapper.backend is backend

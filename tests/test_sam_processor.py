@@ -14,9 +14,12 @@ import cv2
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from src.core.sam_processor import SAMProcessor, ProcessingResult
+from src.core.sam_processor import SAMProcessor
+from src.core.batch_runner import BatchRunner
+from src.core.item_processor import ItemProcessor
 from src.core.data_manager import DataManager, DataItem
 from src.core.labelme_io import MaskShape
+from src.core.types import ProcessingResult
 
 
 class TestSAMProcessor:
@@ -171,6 +174,42 @@ class TestSAMProcessor:
         assert result.success is False
         assert "BBox file not found" in result.error_message
 
+    def test_process_single_empty_labels_are_skipped_when_enabled(self, tmp_path, mock_sam_wrapper):
+        """Test: Empty label files are treated as skipped success when enabled."""
+        data_root = tmp_path
+        (data_root / "images").mkdir()
+        (data_root / "bbox").mkdir()
+        (data_root / "mask").mkdir()
+
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        cv2.imwrite(str(data_root / "images" / "empty.jpg"), image)
+        (data_root / "bbox" / "empty.json").write_text(
+            json.dumps(
+                {
+                    "version": "5.10.1",
+                    "shapes": [],
+                    "imagePath": "../images/empty.jpg",
+                    "imageHeight": 32,
+                    "imageWidth": 32,
+                }
+            )
+        )
+
+        data_manager = DataManager(data_root)
+        item = data_manager.scan_dataset()[0]
+
+        processor = SAMProcessor(
+            data_manager=data_manager,
+            sam_wrapper=mock_sam_wrapper,
+            skip_empty_labels=True,
+        )
+
+        result = processor.process_single(item)
+
+        assert result.success is True
+        assert result.mask_shapes == []
+        assert not (data_root / "mask" / "empty.json").exists()
+
     def test_process_single_image_not_found(self, temp_data_setup, mock_sam_wrapper):
         """Test: Fail when image doesn't exist."""
         data_root = temp_data_setup
@@ -299,200 +338,67 @@ class TestProcessingResult:
         assert result.error_message is None
 
 
-class TestSAMProcessorRuntimeControls:
-    """Tests for runtime control parameters."""
+class TestSAMProcessorFacade:
+    """Tests for the compatibility facade wiring."""
 
-    def test_checkpoint_interval_control(self, tmp_path):
-        """Test: Checkpoint is saved by interval and at completion."""
+    def test_process_single_delegates_to_item_processor(self, tmp_path):
+        """Test: process_single delegates to the configured item processor."""
         data_root = tmp_path
         (data_root / "images").mkdir()
         (data_root / "bbox").mkdir()
         (data_root / "mask").mkdir()
+
+        data_item = DataItem(
+            image_path=data_root / "images" / "sample.jpg",
+            bbox_path=data_root / "bbox" / "sample.json",
+            mask_path=data_root / "mask" / "sample.json",
+            relative_path=Path("sample.jpg"),
+            image_id="sample",
+        )
+        expected = ProcessingResult(data_item=data_item, success=True)
+
+        item_processor = MagicMock(spec=ItemProcessor)
+        item_processor.process.return_value = expected
 
         processor = SAMProcessor(
             data_manager=DataManager(data_root),
             sam_wrapper=MagicMock(),
-            enable_checkpoint=True,
-            checkpoint_interval=3,
+            item_processor=item_processor,
+            batch_runner=MagicMock(spec=BatchRunner),
         )
 
-        # Not an interval hit, should skip save.
-        processor._save_checkpoint(1, 10)
-        assert not (data_root / ".processing_checkpoint.json").exists()
+        result = processor.process_single(data_item)
 
-        # Interval hit, should save.
-        processor._save_checkpoint(3, 10)
-        checkpoint_file = data_root / ".processing_checkpoint.json"
-        assert checkpoint_file.exists()
-        data = json.loads(checkpoint_file.read_text())
-        assert data["processed_count"] == 3
+        assert result is expected
+        item_processor.process.assert_called_once_with(data_item)
 
-        # Final progress should always save.
-        processor._save_checkpoint(10, 10)
-        data = json.loads(checkpoint_file.read_text())
-        assert data["processed_count"] == 10
-
-    def test_preload_images_populates_cache(self, tmp_path):
-        """Test: Preload mode caches images up to configured size."""
+    def test_process_batch_delegates_to_batch_runner(self, tmp_path):
+        """Test: process_batch delegates to the configured batch runner."""
         data_root = tmp_path
         (data_root / "images").mkdir()
         (data_root / "bbox").mkdir()
         (data_root / "mask").mkdir()
 
-        # Two images
-        image = np.zeros((32, 32, 3), dtype=np.uint8)
-        cv2.imwrite(str(data_root / "images" / "a.jpg"), image)
-        cv2.imwrite(str(data_root / "images" / "b.jpg"), image)
-
-        # Matching bbox json files
-        bbox_data = {
-            "version": "5.10.1",
-            "shapes": [{"label": "worm", "points": [[0, 0], [10, 10]], "shape_type": "rectangle"}],
-            "imagePath": "../images/a.jpg",
-            "imageHeight": 32,
-            "imageWidth": 32,
-        }
-        with open(data_root / "bbox" / "a.json", "w") as f:
-            json.dump(bbox_data, f)
-        bbox_data["imagePath"] = "../images/b.jpg"
-        with open(data_root / "bbox" / "b.json", "w") as f:
-            json.dump(bbox_data, f)
-
-        data_manager = DataManager(data_root)
-        items = sorted(data_manager.scan_dataset(), key=lambda x: x.image_id)
-
-        processor = SAMProcessor(
-            data_manager=data_manager,
-            sam_wrapper=MagicMock(),
-            preload_images=True,
-            image_cache_size=1,
-            num_workers=1,
+        data_item = DataItem(
+            image_path=data_root / "images" / "sample.jpg",
+            bbox_path=data_root / "bbox" / "sample.json",
+            mask_path=data_root / "mask" / "sample.json",
+            relative_path=Path("sample.jpg"),
+            image_id="sample",
         )
+        expected = [ProcessingResult(data_item=data_item, success=True)]
 
-        processor._preload_batch_images(items)
-        assert len(processor._image_cache) == 1
-
-    def test_memory_watch_fallback_decision(self, tmp_path):
-        """Test: Memory watch forces single worker when above limit."""
-        data_root = tmp_path
-        (data_root / "images").mkdir()
-        (data_root / "bbox").mkdir()
-        (data_root / "mask").mkdir()
+        batch_runner = MagicMock(spec=BatchRunner)
+        batch_runner.process_batch.return_value = expected
 
         processor = SAMProcessor(
             data_manager=DataManager(data_root),
             sam_wrapper=MagicMock(),
-            enable_memory_watch=True,
-            memory_limit_gb=1.0,
+            item_processor=MagicMock(spec=ItemProcessor),
+            batch_runner=batch_runner,
         )
 
-        processor._get_memory_usage_gb = lambda: 2.0
-        assert processor._should_fallback_to_single_worker() is True
+        result = processor.process_batch([data_item], show_progress=False)
 
-        processor._get_memory_usage_gb = lambda: 0.5
-        assert processor._should_fallback_to_single_worker() is False
-
-    def test_resume_does_not_double_offset_after_slicing(self, tmp_path):
-        """Test: Resume mode processes all remaining items without skipping."""
-        data_root = tmp_path
-        (data_root / "images").mkdir()
-        (data_root / "bbox").mkdir()
-        (data_root / "mask").mkdir()
-
-        image = np.zeros((16, 16, 3), dtype=np.uint8)
-        bbox_data = {
-            "version": "5.10.1",
-            "shapes": [{"label": "worm", "points": [[1, 1], [8, 8]], "shape_type": "rectangle"}],
-            "imagePath": "../images/0.jpg",
-            "imageHeight": 16,
-            "imageWidth": 16,
-        }
-
-        for i in range(6):
-            name = f"{i}.jpg"
-            cv2.imwrite(str(data_root / "images" / name), image)
-            bbox_data["imagePath"] = f"../images/{name}"
-            with open(data_root / "bbox" / f"{i}.json", "w") as f:
-                json.dump(bbox_data, f)
-
-        (data_root / ".processing_checkpoint.json").write_text(
-            json.dumps({"processed_count": 2, "total_count": 6})
-        )
-
-        data_manager = DataManager(data_root)
-        data_items = sorted(data_manager.scan_dataset(), key=lambda x: x.image_id)
-
-        processor = SAMProcessor(
-            data_manager=data_manager,
-            sam_wrapper=MagicMock(),
-            batch_size=2,
-            num_workers=1,
-            enable_checkpoint=True,
-            enable_resume=True,
-        )
-
-        processed_ids = []
-
-        def _fake_process(item):
-            processed_ids.append(item.image_id)
-            return ProcessingResult(data_item=item, success=True)
-
-        processor._process_single_item = _fake_process
-
-        results = processor.process_batch(data_items, show_progress=False)
-
-        assert len(results) == 4
-        assert processed_ids == ["2", "3", "4", "5"]
-
-    def test_resume_ignores_stale_checkpoint_when_item_count_mismatch(self, tmp_path):
-        """Test: Stale checkpoint is ignored when current data size differs."""
-        data_root = tmp_path
-        (data_root / "images").mkdir()
-        (data_root / "bbox").mkdir()
-        (data_root / "mask").mkdir()
-
-        image = np.zeros((16, 16, 3), dtype=np.uint8)
-        bbox_data = {
-            "version": "5.10.1",
-            "shapes": [{"label": "worm", "points": [[1, 1], [8, 8]], "shape_type": "rectangle"}],
-            "imagePath": "../images/0.jpg",
-            "imageHeight": 16,
-            "imageWidth": 16,
-        }
-
-        for i in range(3):
-            name = f"{i}.jpg"
-            cv2.imwrite(str(data_root / "images" / name), image)
-            bbox_data["imagePath"] = f"../images/{name}"
-            with open(data_root / "bbox" / f"{i}.json", "w") as f:
-                json.dump(bbox_data, f)
-
-        # Simulate stale checkpoint from an older run with different dataset size.
-        (data_root / ".processing_checkpoint.json").write_text(
-            json.dumps({"processed_count": 5, "total_count": 10})
-        )
-
-        data_manager = DataManager(data_root)
-        data_items = sorted(data_manager.scan_dataset(), key=lambda x: x.image_id)
-
-        processor = SAMProcessor(
-            data_manager=data_manager,
-            sam_wrapper=MagicMock(),
-            batch_size=2,
-            num_workers=1,
-            enable_checkpoint=True,
-            enable_resume=True,
-        )
-
-        processed_ids = []
-
-        def _fake_process(item):
-            processed_ids.append(item.image_id)
-            return ProcessingResult(data_item=item, success=True)
-
-        processor._process_single_item = _fake_process
-
-        results = processor.process_batch(data_items, show_progress=False)
-
-        assert len(results) == 3
-        assert processed_ids == ["0", "1", "2"]
+        assert result == expected
+        batch_runner.process_batch.assert_called_once_with([data_item], show_progress=False)

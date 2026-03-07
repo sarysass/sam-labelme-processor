@@ -1,6 +1,6 @@
 # SAM 模型配置
 sam:
-  weights: "weights/sam2.1_t.pt"  # 请修改为你的 SAM 模型权重路径
+  weights: "weights/sam2.1_t.pt"  # 本地 Ultralytics SAM 权重路径
   device: "auto"                   # auto, cuda:0, cpu, mps (Mac M1/M2/M3 GPU)
   imgsz: 1024
   iou_threshold: 0.3

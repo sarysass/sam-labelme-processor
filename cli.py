@@ -33,35 +33,32 @@ def setup_logging(level: str = "INFO", log_file=None) -> None:
     )
 
 
-def cmd_process(args):
-    """process command."""
-    # Load config
-    config = Config(args.config)
+def load_runtime_config(args) -> Config:
+    """Load runtime configuration from the selected file."""
+    return Config(args.config)
 
-    # Setup logging
-    setup_logging(config.get("logging.level", "INFO"), config.get("logging.file"))
 
-    # Create DataManager
-    data_manager = DataManager(
-        data_root=Path(args.data_dir)
-        if args.data_dir
-        else Path(config.get("data.root")),
+def build_data_manager(config: Config, args) -> DataManager:
+    """Build the dataset manager from config and CLI overrides."""
+    data_root = Path(args.data_dir) if getattr(args, "data_dir", None) else Path(config.get("data.root"))
+    return DataManager(
+        data_root=data_root,
         images_dir=config.get("data.images_dir", "images"),
         bbox_dir=config.get("data.bbox_dir", "bbox"),
         mask_dir=config.get("data.mask_dir", "mask"),
         bbox_extension=config.get("data.bbox_extension", ".json"),
     )
 
-    # Create SAMWrapper
+
+def build_processor(config: Config, data_manager: DataManager) -> SAMProcessor:
+    """Build the SAM processor and its runtime dependencies."""
     sam_wrapper = SAMWrapper(
         weights=config.get("sam.weights", "weights/sam2.1_t.pt"),
         device=config.get("sam.device", "auto"),
         imgsz=config.get("sam.imgsz", 1024),
         iou_threshold=config.get("sam.iou_threshold", 0.3),
     )
-
-    # Create Processor
-    processor = SAMProcessor(
+    return SAMProcessor(
         data_manager=data_manager,
         sam_wrapper=sam_wrapper,
         output_separate=config.get("output.separate", True),
@@ -80,6 +77,18 @@ def cmd_process(args):
         preload_images=config.get("processing.preload_images", False),
         image_cache_size=config.get("processing.image_cache_size", 10),
     )
+
+
+def cmd_process(args):
+    """process command."""
+    # Load config
+    config = load_runtime_config(args)
+
+    # Setup logging
+    setup_logging(config.get("logging.level", "INFO"), config.get("logging.file"))
+
+    data_manager = build_data_manager(config, args)
+    processor = build_processor(config, data_manager)
 
     # Get pending items
     if args.resume:
@@ -113,17 +122,8 @@ def cmd_process(args):
 
 def cmd_validate(args):
     """validate command."""
-    config = Config(args.config)
-
-    data_manager = DataManager(
-        data_root=Path(args.data_dir)
-        if args.data_dir
-        else Path(config.get("data.root")),
-        images_dir=config.get("data.images_dir", "images"),
-        bbox_dir=config.get("data.bbox_dir", "bbox"),
-        mask_dir=config.get("data.mask_dir", "mask"),
-        bbox_extension=config.get("data.bbox_extension", ".json"),
-    )
+    config = load_runtime_config(args)
+    data_manager = build_data_manager(config, args)
 
     items = data_manager.scan_dataset()
     stats = data_manager.get_stats()
@@ -144,17 +144,8 @@ def cmd_validate(args):
 
 def cmd_stats(args):
     """stats command."""
-    config = Config(args.config)
-
-    data_manager = DataManager(
-        data_root=Path(args.data_dir)
-        if args.data_dir
-        else Path(config.get("data.root")),
-        images_dir=config.get("data.images_dir", "images"),
-        bbox_dir=config.get("data.bbox_dir", "bbox"),
-        mask_dir=config.get("data.mask_dir", "mask"),
-        bbox_extension=config.get("data.bbox_extension", ".json"),
-    )
+    config = load_runtime_config(args)
+    data_manager = build_data_manager(config, args)
 
     stats = data_manager.get_stats()
 
