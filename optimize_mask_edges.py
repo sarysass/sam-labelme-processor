@@ -75,6 +75,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cavity-min-area", type=int, default=25)
     parser.add_argument("--cavity-min-distance", type=int, default=2)
     parser.add_argument("--cavity-intensity-margin", type=float, default=5.0)
+    parser.add_argument("--enable-shell-removal", action="store_true")
+    parser.add_argument("--shell-max-thickness", type=int, default=5)
+    parser.add_argument("--shell-background-cost-multiplier", type=float, default=1.1)
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -107,6 +110,9 @@ def main() -> int:
         cavity_min_area=args.cavity_min_area,
         cavity_min_distance=args.cavity_min_distance,
         cavity_intensity_margin=args.cavity_intensity_margin,
+        enable_shell_removal=args.enable_shell_removal,
+        shell_max_thickness=args.shell_max_thickness,
+        shell_background_cost_multiplier=args.shell_background_cost_multiplier,
     )
 
     json_files = collect_json_files(input_path)

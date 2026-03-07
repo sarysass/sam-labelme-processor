@@ -35,6 +35,9 @@ class EdgeOptimizationConfig:
     cavity_min_area: int = 25
     cavity_min_distance: int = 2
     cavity_intensity_margin: float = 5.0
+    enable_shell_removal: bool = False
+    shell_max_thickness: int = 5
+    shell_background_cost_multiplier: float = 1.1
 
 
 def _odd_kernel_size(kernel_size: int) -> int:
@@ -245,6 +248,89 @@ def recover_internal_cavities(
         if _connected_component_count(candidate_mask) != original_components:
             continue
 
+        candidate_mask = _remove_background_like_shells(
+            current_mask=candidate_mask,
+            cavity_mask=removal_mask,
+            background_distance=background_distance,
+            foreground_distance=foreground_distance,
+            original_components=original_components,
+            config=config,
+        )
+
+        refined_mask = candidate_mask
+
+    return refined_mask
+
+
+def _remove_background_like_shells(
+    current_mask: np.ndarray,
+    cavity_mask: np.ndarray,
+    background_distance: np.ndarray,
+    foreground_distance: np.ndarray,
+    original_components: int,
+    config: EdgeOptimizationConfig,
+) -> np.ndarray:
+    """Remove thin shell components that touch both the cavity and the outer background."""
+    if not config.enable_shell_removal:
+        return current_mask
+
+    binary_mask = (current_mask > 0).astype(np.uint8)
+    if np.count_nonzero(binary_mask) == 0 or np.count_nonzero(cavity_mask) == 0:
+        return binary_mask
+
+    thickness = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+    thin_foreground = np.logical_and(
+        binary_mask > 0,
+        thickness <= float(max(1, int(config.shell_max_thickness))),
+    ).astype(np.uint8)
+    if np.count_nonzero(thin_foreground) == 0:
+        return binary_mask
+
+    cavity_neighbors = np.logical_and(
+        cv2.dilate((cavity_mask > 0).astype(np.uint8), _ellipse_kernel(1)) > 0,
+        thin_foreground > 0,
+    )
+    outside_ring = cv2.dilate(binary_mask, _ellipse_kernel(1)) - binary_mask
+    outside_neighbors = np.logical_and(
+        cv2.dilate(outside_ring.astype(np.uint8), _ellipse_kernel(1)) > 0,
+        thin_foreground > 0,
+    )
+    if not np.any(cavity_neighbors) or not np.any(outside_neighbors):
+        return binary_mask
+
+    background_like_pixels = np.logical_and(
+        thin_foreground > 0,
+        background_distance * float(config.shell_background_cost_multiplier)
+        < foreground_distance + float(config.cavity_intensity_margin),
+    ).astype(np.uint8)
+    if np.count_nonzero(background_like_pixels) == 0:
+        return binary_mask
+
+    component_count, labels, _stats, _ = cv2.connectedComponentsWithStats(
+        background_like_pixels,
+        connectivity=8,
+    )
+    refined_mask = binary_mask.copy()
+    for component_id in range(1, component_count):
+        component_mask = labels == component_id
+        expanded_component = cv2.dilate(component_mask.astype(np.uint8), _ellipse_kernel(1))
+        if not np.any(np.logical_and(expanded_component > 0, cavity_neighbors)):
+            continue
+        if not np.any(np.logical_and(expanded_component > 0, outside_neighbors)):
+            continue
+
+        component_background_distance = float(np.mean(background_distance[component_mask]))
+        component_foreground_distance = float(np.mean(foreground_distance[component_mask]))
+        if (
+            component_background_distance * float(config.shell_background_cost_multiplier)
+            >= component_foreground_distance + float(config.cavity_intensity_margin)
+        ):
+            continue
+
+        candidate_mask = refined_mask.copy()
+        candidate_mask[component_mask] = 0
+        if _connected_component_count(candidate_mask) != original_components:
+            continue
         refined_mask = candidate_mask
 
     return refined_mask

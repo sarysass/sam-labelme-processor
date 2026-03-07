@@ -225,3 +225,60 @@ class TestMaskEdgeOptimizer:
         refined_mask = refine_mask_with_edges(image, input_mask, config)
 
         assert np.array_equal(refined_mask, input_mask)
+
+    def test_refine_mask_with_shell_removal_trims_residual_shell(self):
+        """Test: Shell removal trims a thin background-like shell after cavity recovery."""
+        image = np.full((120, 120, 3), 180, dtype=np.uint8)
+        target_mask = np.zeros((120, 120), dtype=np.uint8)
+        input_mask = np.zeros((120, 120), dtype=np.uint8)
+
+        cv2.circle(target_mask, (60, 60), 24, 1, -1)
+        cv2.circle(target_mask, (60, 60), 15, 0, -1)
+        cv2.rectangle(target_mask, (62, 31), (72, 60), 0, -1)
+        cv2.circle(input_mask, (60, 60), 24, 1, -1)
+
+        image[input_mask > 0] = (60, 60, 60)
+        cv2.circle(image, (60, 60), 8, (180, 180, 180), -1)
+        image[31:61, 62:73] = (120, 120, 120)
+
+        cavity_only_config = EdgeOptimizationConfig(
+            search_radius=6,
+            foreground_erode=4,
+            background_dilate=2,
+            gaussian_kernel_size=3,
+            canny_low_threshold=1000,
+            canny_high_threshold=2000,
+            min_area_ratio=0.3,
+            max_area_ratio=1.5,
+            smoothing_kernel_size=3,
+            smoothing_morph_radius=0,
+            enable_cavity_recovery=True,
+            cavity_min_area=25,
+            cavity_min_distance=2,
+            cavity_intensity_margin=5.0,
+        )
+
+        shell_config = EdgeOptimizationConfig(
+            search_radius=6,
+            foreground_erode=4,
+            background_dilate=2,
+            gaussian_kernel_size=3,
+            canny_low_threshold=1000,
+            canny_high_threshold=2000,
+            min_area_ratio=0.3,
+            max_area_ratio=1.5,
+            smoothing_kernel_size=3,
+            smoothing_morph_radius=0,
+            enable_cavity_recovery=True,
+            cavity_min_area=25,
+            cavity_min_distance=2,
+            cavity_intensity_margin=5.0,
+            enable_shell_removal=True,
+            shell_max_thickness=12,
+            shell_background_cost_multiplier=1.0,
+        )
+
+        cavity_only_mask = refine_mask_with_edges(image, input_mask, cavity_only_config)
+        shell_mask = refine_mask_with_edges(image, input_mask, shell_config)
+
+        assert _iou(shell_mask, target_mask) > _iou(cavity_only_mask, target_mask)
